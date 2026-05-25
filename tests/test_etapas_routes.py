@@ -179,9 +179,23 @@ def test_get_agrupado_proceso_404(client, editor_headers):
 # POST /procesos/{id}/etapas
 # ---------------------------------------------------------------------------
 
-def test_post_etapa_201(client, editor_headers):
-    """EDITOR POST → 201 with EtapaOut body."""
+def test_post_etapa_201(client, editor_headers, db_session):
+    """EDITOR POST → 201 with EtapaOut body (E01 prereq COMPLETADO with cmn_adjunto=SI)."""
     proc = _create_proceso(client, editor_headers)
+    # R1 + prereq: mark the E01 row as COMPLETADO so E02 can register
+    from app.models.etapa import EtapaRegistro
+    from sqlalchemy import select
+    e01_rows = db_session.execute(
+        select(EtapaRegistro).where(
+            EtapaRegistro.proceso_id == proc["id"],
+            EtapaRegistro.codigo_etapa == "E01",
+        )
+    ).scalars().all()
+    for row in e01_rows:
+        row.cmn_adjunto = "SI"
+        row.estado_etapa = "COMPLETADO"
+    db_session.flush()
+
     resp = client.post(
         f"/procesos/{proc['id']}/etapas",
         json=_etapa_payload(codigo_etapa="E02", nombre_etapa="TDR"),
@@ -256,9 +270,18 @@ def test_bucle_invalid_cod_400(client, editor_headers):
     assert resp.status_code == 400, resp.text
 
 
-def test_bucle_valid_cod_201(client, editor_headers):
-    """POST /bucle with valid bucle cod (E05) → 201."""
+def test_bucle_valid_cod_201(client, editor_headers, db_session):
+    """POST /bucle with valid bucle cod (E05) → 201 (R6: E04 COMPLETADO)."""
     proc = _create_proceso(client, editor_headers)
+    # R6: E04 must be COMPLETADO for E05/E06 bucles
+    from app.models.etapa import EtapaRegistro
+    db_session.add(EtapaRegistro(
+        proceso_id=proc["id"], codigo_etapa="E04",
+        nombre_etapa="OTA deriva expediente", estado_etapa="COMPLETADO",
+        nro_ronda=1, registrado_por="testsetup",
+    ))
+    db_session.flush()
+
     resp = client.post(
         f"/procesos/{proc['id']}/etapas/E05/bucle",
         json={"motivo_bucle": "Primera observación OEAS"},
@@ -271,9 +294,18 @@ def test_bucle_valid_cod_201(client, editor_headers):
     assert body["es_bucle"] is True
 
 
-def test_bucle_increments_via_http(client, editor_headers):
-    """Two consecutive /bucle POSTs increment nro_ronda correctly."""
+def test_bucle_increments_via_http(client, editor_headers, db_session):
+    """Two consecutive /bucle POSTs increment nro_ronda correctly (R6: E04 COMPLETADO)."""
     proc = _create_proceso(client, editor_headers)
+    # R6: E04 must be COMPLETADO
+    from app.models.etapa import EtapaRegistro
+    db_session.add(EtapaRegistro(
+        proceso_id=proc["id"], codigo_etapa="E04",
+        nombre_etapa="OTA deriva expediente", estado_etapa="COMPLETADO",
+        nro_ronda=1, registrado_por="testsetup",
+    ))
+    db_session.flush()
+
     url = f"/procesos/{proc['id']}/etapas/E06/bucle"
     payload = {"motivo_bucle": "Corrección X"}
 

@@ -46,6 +46,8 @@ class EtapaCreate(BaseModel):
     nro_ocs: str | None = None
     monto_ocs: Decimal | None = Field(default=None, ge=0)
     plazo_entrega: int | None = Field(default=None, ge=0)
+    # C3b: R2 — required when resultado_eval = 'SIN_PRESUPUESTO'
+    motivo_cancel: str | None = None
 
 
 class EtapaUpdate(BaseModel):

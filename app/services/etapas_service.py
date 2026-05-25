@@ -1,11 +1,12 @@
-"""Service layer for etapas mechanics — C3a scope.
+"""Service layer for etapas — C3a mechanics + C3b rules wired.
 
-NO business rule enforcement here. All R1-R8 logic lives in validaciones.py (C3b).
-Audit (historial_cambios) is written only on PUT (actualizar_etapa).
+Business rule enforcement via validaciones.py (C3b).
+Audit (historial_cambios) is written on PUT and on state transitions.
 
 Key design decisions:
   D2 — progreso is derived from rows, never persisted.
   D4 — GET response is grouped: rondas[] for loop stages, filas[] for others.
+  D3 — R2 (E10 SIN_PRESUPUESTO) → proceso CANCELADO; R5 (E25 COMPLETADO) → CULMINADO.
 
 Functions > 50 lines are split into private helpers per coding conventions.
 """
@@ -19,6 +20,8 @@ from sqlalchemy.orm import Session
 
 from app.models.etapa import EtapaRegistro
 from app.models.historial import HistorialCambio
+from app.models.montos import MontosProceso
+from app.models.proceso import Proceso
 from app.schemas.etapa import (
     BucleCreate,
     EtapaAgrupadaOut,
@@ -54,17 +57,47 @@ def registrar_etapa(
     payload: EtapaCreate,
     current_user_username: str,
 ) -> EtapaRegistro:
-    """Insert a new etapas_registro row. No rule validation (C3b adds that).
+    """Insert a new etapas_registro row with C3b rule validation.
 
-    For the first registration of a loop stage, nro_ronda is set to 1.
-    For subsequent rounds use agregar_ronda_bucle instead.
+    Calls validaciones before persisting; runs montos sync and state
+    transitions after persisting (within the same transaction).
     """
-    spec = ETAPAS_CATALOGO.get(payload.codigo_etapa)
+    from app.services.validaciones import (
+        validar_proceso_activo,
+        validar_prerequisito_generico,
+        validar_r1_e02,
+        validar_r2_e10,
+        validar_r3_e12,
+        validar_r5_e25,
+        validar_r7_e09,
+    )
+
+    # --- Gate: proceso must not be CANCELADO ---
+    validar_proceso_activo(db, proceso_id)
+
+    cod = payload.codigo_etapa
+
+    # --- Generic prerequisite check (covers E02←E01, E09←E08, E12←E11, E25←E24) ---
+    validar_prerequisito_generico(db, proceso_id, cod)
+
+    # --- Stage-specific rules ---
+    if cod == "E02":
+        validar_r1_e02(db, proceso_id)
+    if cod == "E10":
+        validar_r2_e10(db, proceso_id, payload)
+    if cod == "E12":
+        validar_r3_e12(db, proceso_id)
+    if cod == "E09":
+        validar_r7_e09(db, proceso_id)
+    if cod == "E25":
+        validar_r5_e25(db, proceso_id)
+
+    spec = ETAPAS_CATALOGO.get(cod)
     es_bucle = spec.es_bucle if spec else False
 
     row = EtapaRegistro(
         proceso_id=proceso_id,
-        codigo_etapa=payload.codigo_etapa,
+        codigo_etapa=cod,
         nombre_etapa=payload.nombre_etapa,
         area_responsable=spec.area_responsable if spec else None,
         fecha_inicio=payload.fecha_inicio,
@@ -89,7 +122,13 @@ def registrar_etapa(
     )
     db.add(row)
     db.flush()
-    # TODO C3b: sync_montos(db, proceso_id, payload.codigo_etapa, row)
+
+    # --- Post-persist: montos sync + state transitions ---
+    sync_montos(db, proceso_id, cod, row)
+    _aplicar_transicion_estado_proceso(
+        db, proceso_id, cod, payload, row, current_user_username
+    )
+
     return row
 
 
@@ -128,7 +167,11 @@ def actualizar_etapa(
     etapa.actualizado_por = current_user_username
     etapa.actualizado_en = datetime.now(timezone.utc).replace(tzinfo=None)
     db.flush()
-    # TODO C3b: sync_montos(db, etapa.proceso_id, etapa.codigo_etapa, etapa)
+
+    # Sync montos if this update completes a trigger stage
+    if etapa.proceso_id is not None:
+        sync_montos(db, etapa.proceso_id, etapa.codigo_etapa, etapa)
+
     return etapa
 
 
@@ -139,11 +182,25 @@ def agregar_ronda_bucle(
     payload: BucleCreate,
     current_user_username: str,
 ) -> EtapaRegistro:
-    """Add a new round for a loop-type stage.
+    """Add a new round for a loop-type stage with C3b rule validation.
 
-    Computes nro_ronda = MAX(nro_ronda WHERE proceso_id, codigo_etapa) + 1.
-    No rule enforcement (C3b validates R6).
+    Validates R6 (E05/E06 require E04 COMPLETADO) and generic prereqs before
+    inserting. Computes nro_ronda = MAX(nro_ronda WHERE proceso_id, cod) + 1.
     """
+    from app.services.validaciones import (
+        validar_proceso_activo,
+        validar_prerequisito_generico,
+        validar_r6_bucle_tdr,
+    )
+
+    validar_proceso_activo(db, proceso_id)
+
+    if cod in ("E05", "E06"):
+        validar_r6_bucle_tdr(db, proceso_id)
+
+    # Generic prereq covers E08a/E08b (prerequisitos defined in catalogo)
+    validar_prerequisito_generico(db, proceso_id, cod)
+
     max_ronda = db.execute(
         select(func.max(EtapaRegistro.nro_ronda)).where(
             EtapaRegistro.proceso_id == proceso_id,
@@ -192,6 +249,197 @@ def _registrar_auditoria(
             modificado_por=usuario,
         )
     )
+
+
+# ---------------------------------------------------------------------------
+# Montos sync (WU-B2 — replaces C3a TODO stub)
+# ---------------------------------------------------------------------------
+
+def sync_montos(
+    db: Session,
+    proceso_id: int,
+    cod: str,
+    etapa_row: EtapaRegistro,
+) -> None:
+    """Upsert montos_proceso when a trigger stage reaches COMPLETADO.
+
+    Trigger stages: E09 → valor_em; E12 → monto_cert_total (sum E11);
+    E19 → nro_ocs/monto_ocs/plazo_entrega; E22 → fecha_inicio_srv.
+
+    vencimiento_ocs is DERIVED on GET (fecha_inicio + plazo_entrega) — never stored.
+    """
+    if etapa_row.estado_etapa != "COMPLETADO":
+        return
+    if cod not in ("E09", "E12", "E19", "E22"):
+        return
+
+    montos = db.execute(
+        select(MontosProceso).where(MontosProceso.proceso_id == proceso_id)
+    ).scalars().first()
+    if montos is None:
+        montos = MontosProceso(proceso_id=proceso_id)
+        db.add(montos)
+
+    if cod == "E09":
+        montos.valor_em = etapa_row.monto_cert
+    elif cod == "E12":
+        total = db.execute(
+            select(func.sum(EtapaRegistro.monto_cert)).where(
+                EtapaRegistro.proceso_id == proceso_id,
+                EtapaRegistro.codigo_etapa == "E11",
+            )
+        ).scalar_one_or_none() or Decimal("0.00")
+        montos.monto_cert_total = total
+    elif cod == "E19":
+        montos.nro_ocs = etapa_row.nro_ocs
+        montos.monto_ocs = etapa_row.monto_ocs
+        montos.plazo_entrega = etapa_row.plazo_entrega
+    elif cod == "E22":
+        montos.fecha_inicio_srv = etapa_row.fecha_inicio
+
+    db.flush()
+
+
+# ---------------------------------------------------------------------------
+# State transitions (Design D3 — R2 CANCELADO, R5 CULMINADO)
+# ---------------------------------------------------------------------------
+
+def _aplicar_transicion_estado_proceso(
+    db: Session,
+    proceso_id: int,
+    cod: str,
+    payload,
+    etapa_row: EtapaRegistro,
+    current_user_username: str,
+) -> None:
+    """Apply proceso state transitions driven by business rules R2 and R5.
+
+    R2: E10 + resultado_eval='SIN_PRESUPUESTO' → proceso CANCELADO + motivo_cancel.
+    R5: E25 + estado_etapa='COMPLETADO' → proceso CULMINADO.
+        fecha_fin_total: Design decision — E25.fecha_fin is the canonical end date;
+        no new column on procesos. GET /procesos/{id} derives it from E25 row.
+    """
+    if cod == "E10" and getattr(payload, "resultado_eval", None) == "SIN_PRESUPUESTO":
+        proceso = db.get(Proceso, proceso_id)
+        if proceso:
+            estado_antes = proceso.estado
+            proceso.estado = "CANCELADO"
+            proceso.motivo_cancel = getattr(payload, "motivo_cancel", None)
+            _registrar_auditoria(
+                db,
+                proceso_id=proceso_id,
+                etapa_id=etapa_row.id,
+                campo="proceso.estado",
+                antes=estado_antes,
+                nuevo="CANCELADO",
+                usuario=current_user_username,
+            )
+
+    elif cod == "E25" and etapa_row.estado_etapa == "COMPLETADO":
+        proceso = db.get(Proceso, proceso_id)
+        if proceso:
+            estado_antes = proceso.estado
+            proceso.estado = "CULMINADO"
+            _registrar_auditoria(
+                db,
+                proceso_id=proceso_id,
+                etapa_id=etapa_row.id,
+                campo="proceso.estado",
+                antes=estado_antes,
+                nuevo="CULMINADO",
+                usuario=current_user_username,
+            )
+
+
+# ---------------------------------------------------------------------------
+# Reiniciar TDR (Design D3 — endpoint POST /procesos/{id}/reiniciar-tdr)
+# ---------------------------------------------------------------------------
+
+#: Códigos a marcar OMITIDO en el reinicio (E02..E09 inclusive con bucles)
+_CODIGOS_REINICIO: tuple[str, ...] = (
+    "E02", "E03", "E04", "E05", "E06", "E07", "E08", "E08a", "E08b", "E09"
+)
+
+
+def reiniciar_tdr(
+    db: Session,
+    proceso_id: int,
+    current_user_username: str,
+) -> EtapaRegistro:
+    """Reinicia el flujo TDR desde E02 en un proceso CANCELADO por E10 SIN_PRESUPUESTO.
+
+    Operación transaccional (el router hace db.commit):
+    1. Valida precondiciones (proceso CANCELADO + E10 SIN_PRESUPUESTO).
+    2. Marca OMITIDO todas las filas E02-E09 activas (preserva auditoría).
+    3. Inserta nueva fila E02 PENDIENTE con nro_ronda incrementado.
+    4. Restaura proceso.estado='EN PROCESO', limpia motivo_cancel activo.
+    5. Registra auditoría del cambio de estado.
+
+    E01 (CMN) NO se toca — las áreas ya entregaron requerimiento (Design D3).
+    El progreso recalcula solo en GET (OMITIDO no cuenta como COMPLETADO).
+    """
+    from app.services.validaciones import validar_reinicio_tdr
+
+    validar_reinicio_tdr(db, proceso_id)
+
+    # Compute nro_ronda for the new E02
+    max_ronda = db.execute(
+        select(func.max(EtapaRegistro.nro_ronda)).where(
+            EtapaRegistro.proceso_id == proceso_id,
+            EtapaRegistro.codigo_etapa == "E02",
+        )
+    ).scalar_one_or_none() or 0
+    nro_ronda_reinicio = max_ronda + 1
+
+    # Mark E02-E09 rows as OMITIDO (idempotent: skip already-OMITIDO rows)
+    filas_a_omitir = db.execute(
+        select(EtapaRegistro).where(
+            EtapaRegistro.proceso_id == proceso_id,
+            EtapaRegistro.codigo_etapa.in_(_CODIGOS_REINICIO),
+            EtapaRegistro.estado_etapa != "OMITIDO",
+        )
+    ).scalars().all()
+    for fila in filas_a_omitir:
+        fila.estado_etapa = "OMITIDO"
+    db.flush()
+
+    # Insert new E02 PENDIENTE
+    spec = ETAPAS_CATALOGO.get("E02")
+    nueva_e02 = EtapaRegistro(
+        proceso_id=proceso_id,
+        codigo_etapa="E02",
+        nombre_etapa=spec.nombre if spec else "Elaboración TDR consolidado",
+        area_responsable=spec.area_responsable if spec else "OTIN",
+        es_bucle=False,
+        nro_ronda=nro_ronda_reinicio,
+        estado_etapa="PENDIENTE",
+        observaciones=(
+            f"Reinicio TDR tras cancelación E10 (ronda {nro_ronda_reinicio})"
+        ),
+        registrado_por=current_user_username,
+    )
+    db.add(nueva_e02)
+    db.flush()
+
+    # Restore proceso state
+    proceso = db.get(Proceso, proceso_id)
+    if proceso:
+        proceso.estado = "EN PROCESO"
+        proceso.motivo_cancel = None
+
+    # Audit the state change
+    _registrar_auditoria(
+        db,
+        proceso_id=proceso_id,
+        etapa_id=nueva_e02.id,
+        campo="proceso.estado",
+        antes="CANCELADO",
+        nuevo="EN PROCESO",
+        usuario=current_user_username,
+    )
+
+    db.flush()
+    return nueva_e02
 
 
 # ---------------------------------------------------------------------------

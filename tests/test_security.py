@@ -71,8 +71,13 @@ def test_decode_expired_token():
 
 def test_decode_bad_signature():
     token = create_access_token(sub="1", username="admin", rol="ADMIN")
-    # Tamper the last character
-    tampered = token[:-1] + ("X" if token[-1] != "X" else "Y")
+    # Tamper the FIRST char of the signature segment, NOT the last char of the
+    # token. The last base64url char of a JWT signature carries padding bits
+    # that don't affect the decoded bytes, so flipping it can still verify
+    # (made this test flaky). The first signature char is always significant.
+    parts = token.split(".")
+    parts[2] = ("A" if parts[2][0] != "A" else "B") + parts[2][1:]
+    tampered = ".".join(parts)
     with pytest.raises(HTTPException) as exc_info:
         decode_token(tampered)
     assert exc_info.value.status_code == 401

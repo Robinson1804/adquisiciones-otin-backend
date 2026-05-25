@@ -134,8 +134,11 @@ def test_protected_expired_token(client):
 # S-08: Protected route — invalid signature
 # ---------------------------------------------------------------------------
 def test_protected_invalid_signature(client, admin_token):
-    # Tamper the last character of the signature
-    tampered = admin_token[:-1] + ("X" if admin_token[-1] != "X" else "Y")
+    # Tamper the FIRST char of the signature segment (the last token char carries
+    # base64url padding bits that don't change the decoded signature → flaky).
+    parts = admin_token.split(".")
+    parts[2] = ("A" if parts[2][0] != "A" else "B") + parts[2][1:]
+    tampered = ".".join(parts)
     resp = client.get(
         "/test/protected",
         headers={"Authorization": f"Bearer {tampered}"},

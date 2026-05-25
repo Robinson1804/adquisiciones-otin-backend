@@ -1,6 +1,6 @@
 """Pydantic v2 schemas for procesos endpoints."""
 import math
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
 
@@ -74,3 +74,16 @@ class PaginatedProcesos(BaseModel):
     ) -> "PaginatedProcesos":
         pages = math.ceil(total / page_size) if page_size > 0 else 0
         return cls(items=items, total=total, page=page, page_size=page_size, pages=pages)
+
+
+class MontosOut(BaseModel):
+    """montos_proceso row for the S4 ficha. Numeric fields as float to match
+    the frontend MontosProceso type (number | null)."""
+    model_config = ConfigDict(from_attributes=True)
+
+    valor_em: float | None = None
+    monto_cert_total: float | None = None
+    nro_ocs: str | None = None
+    monto_ocs: float | None = None
+    plazo_entrega: int | None = None
+    fecha_inicio_srv: date | None = None

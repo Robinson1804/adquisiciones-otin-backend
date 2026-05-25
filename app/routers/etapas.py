@@ -1,12 +1,13 @@
-"""Etapas router — endpoints for stage registration, updates, and loops.
+"""Etapas router — endpoints for stage registration, updates, loops, and TDR restart.
 
-C3a scope: mechanics only. No business rule enforcement (R1-R8 are C3b).
+C3a: mechanics. C3b: R1-R8 validation wired in services; reiniciar-tdr added.
 
 Endpoints:
-  GET  /procesos/{id}/etapas            → grouped timeline + progreso
-  POST /procesos/{id}/etapas            → register a stage row
-  PUT  /etapas/{id}                     → update a stage row (with audit)
-  POST /procesos/{id}/etapas/{cod}/bucle → add a loop round
+  GET  /procesos/{id}/etapas               → grouped timeline + progreso
+  POST /procesos/{id}/etapas               → register a stage row (R1-R8 enforced)
+  PUT  /etapas/{id}                        → update a stage row (with audit)
+  POST /procesos/{id}/etapas/{cod}/bucle   → add a loop round (R6 enforced)
+  POST /procesos/{id}/reiniciar-tdr        → restart TDR from E02 (ADMIN/EDITOR)
 """
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
@@ -31,6 +32,7 @@ from app.services.etapas_service import (
     agrupar_etapas,
     calcular_progreso,
     registrar_etapa,
+    reiniciar_tdr,
 )
 
 router = APIRouter(tags=["etapas"])
@@ -128,7 +130,7 @@ def post_etapa(
 ) -> EtapaOut:
     """Register a new stage row for the proceso."""
     _get_active_proceso_or_404(db, proceso_id)
-    # TODO C3b: call validaciones.validar_registro(db, proceso_id, body)
+    # Validaciones R1-R8 are invoked inside registrar_etapa (C3b wired)
     etapa = registrar_etapa(db, proceso_id, body, current_user.username)
     db.commit()
     db.refresh(etapa)
@@ -181,8 +183,35 @@ def post_bucle(
                    f"Etapas de bucle válidas: {sorted(_BUCLE_CODS)}",
         )
     _get_active_proceso_or_404(db, proceso_id)
-    # TODO C3b: call validaciones.validar_bucle(db, proceso_id, cod)
+    # R6 validation is invoked inside agregar_ronda_bucle (C3b wired)
     etapa = agregar_ronda_bucle(db, proceso_id, cod, body, current_user.username)
     db.commit()
     db.refresh(etapa)
     return _etapa_to_out(etapa)
+
+
+# ---------------------------------------------------------------------------
+# POST /procesos/{proceso_id}/reiniciar-tdr  (C3b — Design D3)
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/procesos/{proceso_id}/reiniciar-tdr",
+    response_model=EtapaOut,
+    status_code=status.HTTP_200_OK,
+)
+def post_reiniciar_tdr(
+    proceso_id: int,
+    db: Session = Depends(get_db),
+    current_user: Usuario = Depends(require_role("ADMIN", "EDITOR")),
+) -> EtapaOut:
+    """Restart TDR from E02 on a CANCELADO proceso (E10 SIN_PRESUPUESTO only).
+
+    Marks all E02-E09 rows as OMITIDO (preserves audit), inserts a fresh
+    E02 PENDIENTE, restores proceso.estado = 'EN PROCESO'.
+    ADMIN/EDITOR only. Returns the newly inserted E02 row.
+    """
+    _get_active_proceso_or_404(db, proceso_id)
+    nueva_e02 = reiniciar_tdr(db, proceso_id, current_user.username)
+    db.commit()
+    db.refresh(nueva_e02)
+    return _etapa_to_out(nueva_e02)

@@ -19,10 +19,12 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.dependencies.auth import get_current_user, require_role
 from app.models.etapa import EtapaRegistro
+from app.models.montos import MontosProceso
 from app.models.proceso import Proceso
 from app.models.usuario import Usuario
 from app.schemas.proceso import (
     CmnPorArea,
+    MontosOut,
     PaginatedProcesos,
     ProcesoCreate,
     ProcesoOut,
@@ -230,6 +232,23 @@ def get_proceso(
 ) -> ProcesoOut:
     proceso = _get_active_proceso_or_404(db, proceso_id)
     return ProcesoOut.model_validate(proceso)
+
+
+# ---------------------------------------------------------------------------
+# GET /procesos/{id}/montos — montos consolidados para la ficha S4 (C3b)
+# ---------------------------------------------------------------------------
+
+@router.get("/{proceso_id}/montos", response_model=MontosOut | None)
+def get_montos_proceso(
+    proceso_id: int,
+    db: Session = Depends(get_db),
+    _user: Usuario = Depends(get_current_user),
+) -> MontosOut | None:
+    _get_active_proceso_or_404(db, proceso_id)
+    montos = db.execute(
+        select(MontosProceso).where(MontosProceso.proceso_id == proceso_id)
+    ).scalar_one_or_none()
+    return MontosOut.model_validate(montos) if montos else None
 
 
 # ---------------------------------------------------------------------------

@@ -86,8 +86,13 @@ def _make_etapa(
 # ---------------------------------------------------------------------------
 
 def test_registrar_etapa_simple(db_session):
-    """POST E02 creates a row with correct fields."""
+    """POST E02 creates a row with correct fields (E01 SI prereq satisfied)."""
     proc = _make_proceso(db_session)
+    # R1/prereq: E01 must have cmn_adjunto='SI' and be COMPLETADO for E02 to register
+    _make_etapa(
+        db_session, proc.id, cod="E01",
+        estado="COMPLETADO", area_usuaria="DTDIS", cmn_adjunto="SI",
+    )
     payload = EtapaCreate(
         codigo_etapa="E02",
         nombre_etapa="Elaboración TDR consolidado",
@@ -104,8 +109,10 @@ def test_registrar_etapa_simple(db_session):
 
 
 def test_registrar_etapa_bucle_sets_es_bucle(db_session):
-    """Registering E05 sets es_bucle=True from catalog."""
+    """Registering E05 sets es_bucle=True from catalog (E04 prereq satisfied)."""
     proc = _make_proceso(db_session)
+    # R6: E04 must be COMPLETADO for E05 to register
+    _make_etapa(db_session, proc.id, cod="E04", estado="COMPLETADO")
     payload = EtapaCreate(
         codigo_etapa="E05",
         nombre_etapa="Observaciones TDR",
@@ -132,8 +139,10 @@ def test_registrar_etapa_no_historial(db_session):
 # ---------------------------------------------------------------------------
 
 def test_agregar_ronda_bucle_increments_nro_ronda(db_session):
-    """After inserting ronda 1, agregar_ronda_bucle creates ronda 2."""
+    """After inserting ronda 1, agregar_ronda_bucle creates ronda 2 (E04 prereq satisfied)."""
     proc = _make_proceso(db_session)
+    # R6: E04 COMPLETADO required for E05/E06 bucles
+    _make_etapa(db_session, proc.id, cod="E04", estado="COMPLETADO")
     _make_etapa(db_session, proc.id, cod="E05", es_bucle=True, nro_ronda=1)
 
     payload = BucleCreate(motivo_bucle="Segunda observación")
@@ -145,16 +154,20 @@ def test_agregar_ronda_bucle_increments_nro_ronda(db_session):
 
 
 def test_agregar_ronda_bucle_from_zero(db_session):
-    """When no previous rows exist, nro_ronda starts at 1."""
+    """When no previous rows exist, nro_ronda starts at 1 (E04 prereq satisfied)."""
     proc = _make_proceso(db_session)
+    # R6: E04 COMPLETADO required for E06 bucle
+    _make_etapa(db_session, proc.id, cod="E04", estado="COMPLETADO")
     payload = BucleCreate(motivo_bucle="Primera ronda")
     nueva_ronda = agregar_ronda_bucle(db_session, proc.id, "E06", payload, "editor1")
     assert nueva_ronda.nro_ronda == 1
 
 
 def test_agregar_ronda_bucle_multiple_increments(db_session):
-    """Three consecutive rounds increment nro_ronda correctly."""
+    """Three consecutive rounds increment nro_ronda correctly (E04 prereq satisfied)."""
     proc = _make_proceso(db_session)
+    # R6: E04 COMPLETADO required
+    _make_etapa(db_session, proc.id, cod="E04", estado="COMPLETADO")
     p = BucleCreate(motivo_bucle="x")
     r1 = agregar_ronda_bucle(db_session, proc.id, "E05", p, "u")
     r2 = agregar_ronda_bucle(db_session, proc.id, "E05", p, "u")
@@ -194,8 +207,13 @@ def test_auditoria_on_put(db_session):
 
 
 def test_auditoria_not_on_post(db_session):
-    """POST (registrar_etapa) does NOT write historial_cambios."""
+    """POST (registrar_etapa) does NOT write historial_cambios (E01 prereq satisfied)."""
     proc = _make_proceso(db_session)
+    # R1/prereq: E01 SI required for E02
+    _make_etapa(
+        db_session, proc.id, cod="E01",
+        estado="COMPLETADO", area_usuaria="DTDIS", cmn_adjunto="SI",
+    )
     payload = EtapaCreate(codigo_etapa="E02", nombre_etapa="TDR")
     registrar_etapa(db_session, proc.id, payload, "editor1")
 
