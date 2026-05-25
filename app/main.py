@@ -6,8 +6,11 @@ from sqlalchemy import text
 
 from app.config import settings
 from app.database import get_db
+from app.routers import auth as auth_router
 
 app = FastAPI(title="Adquisiciones TIC API", version="0.1.0")
+
+app.include_router(auth_router.router)
 
 app.add_middleware(
     CORSMiddleware,

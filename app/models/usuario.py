@@ -21,3 +21,4 @@ class Usuario(Base):
     rol: Mapped[str] = mapped_column(String(20), server_default="EDITOR")
     activo: Mapped[bool] = mapped_column(Boolean, server_default=text("TRUE"))
     creado_en: Mapped[datetime] = mapped_column(TIMESTAMP, server_default=func.now())
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
