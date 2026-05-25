@@ -17,6 +17,21 @@ from app.database import Base, get_db
 from app.main import app
 from app.models.usuario import Usuario
 
+# ---------------------------------------------------------------------------
+# Clean-slate fixture — wipes business tables before every test so that
+# rows committed by the router (db.commit() required for pg_advisory_xact_lock)
+# do not bleed across tests.  usuarios is intentionally preserved.
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _clean_business_tables():
+    """Delete all rows from procesos (CASCADE wipes etapas_registro, etc.) before each test."""
+    conn = _test_engine.connect()
+    with conn.begin():
+        conn.execute(text("DELETE FROM procesos"))
+    conn.close()
+    yield
+
 # Suppress passlib bcrypt version read warning (cosmetic only)
 warnings.filterwarnings(
     "ignore",

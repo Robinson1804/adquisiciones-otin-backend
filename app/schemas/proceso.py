@@ -18,7 +18,7 @@ class ProcesoCreate(BaseModel):
     unidad_resp: str | None = None
     areas_usuarias: list[str] = Field(min_length=1)
     pim: Decimal | None = Field(default=None, ge=0)
-    anno: int = Field(ge=2020, le=2100)
+    anno: int = Field(default_factory=lambda: datetime.now().year, ge=2020, le=2100)
     cmn_por_area: list[CmnPorArea] = []
 
     @field_validator("areas_usuarias")

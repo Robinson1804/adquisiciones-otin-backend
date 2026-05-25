@@ -27,8 +27,13 @@ def test_hash_roundtrip():
 def test_tampered_hash():
     plain = "MyS3cur3P@ss!"
     hashed = hash_password(plain)
-    # Flip the last character to simulate tampering
-    tampered = hashed[:-1] + ("X" if hashed[-1] != "X" else "Y")
+    # Tamper a character in the salt region (indices 7..28), NOT the last char.
+    # bcrypt's FINAL base64 char carries padding bits that bcrypt ignores, so
+    # flipping it can still verify True (made this test flaky). Salt bytes are
+    # always significant: changing the salt reliably breaks verification.
+    idx = 15
+    repl = "X" if hashed[idx] != "X" else "Y"
+    tampered = hashed[:idx] + repl + hashed[idx + 1:]
     assert verify_password(plain, tampered) is False
 
 

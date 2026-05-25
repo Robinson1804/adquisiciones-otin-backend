@@ -4,6 +4,7 @@ All tests use the transactional db_session fixture (rolls back after each test)
 so the DB is clean per test. Reuses ADMIN/EDITOR/VIEWER harness from conftest.
 """
 import re
+from datetime import datetime
 
 import pytest
 from sqlalchemy import select
@@ -514,3 +515,20 @@ def test_pim_negativo_422(client, editor_headers):
         headers=editor_headers,
     )
     assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# test_anno_defaults_to_current_year — W-03
+# ---------------------------------------------------------------------------
+
+def test_anno_defaults_to_current_year(client, editor_headers):
+    """POST without anno field → defaults to the current calendar year."""
+    payload = {
+        "requerimiento": "Switch sin anno",
+        "tipo": "BIEN",
+        "areas_usuarias": ["DTDIS"],
+        "cmn_por_area": [{"area": "DTDIS", "cmn_adjunto": "SI"}],
+    }
+    resp = client.post("/procesos", json=payload, headers=editor_headers)
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["anno"] == datetime.now().year
