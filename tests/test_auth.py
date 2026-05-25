@@ -149,7 +149,7 @@ def test_protected_invalid_signature(client, admin_token):
 def test_protected_wrong_role(client, viewer_usuario, viewer_headers):
     resp = client.get("/test/admin-only", headers=viewer_headers)
     assert resp.status_code == 403
-    assert resp.json()["detail"] == "Permiso insuficiente"
+    assert resp.json()["detail"] == "Permisos insuficientes"
 
 
 # ---------------------------------------------------------------------------
