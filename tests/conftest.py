@@ -25,9 +25,15 @@ from app.models.usuario import Usuario
 
 @pytest.fixture(autouse=True)
 def _clean_business_tables():
-    """Delete all rows from procesos (CASCADE wipes etapas_registro, etc.) before each test."""
+    """Wipe business tables before each test, in FK-safe order.
+
+    historial_cambios does NOT cascade from procesos, so it must be deleted
+    first; deleting procesos then cascades to etapas_registro and montos_proceso.
+    usuarios is intentionally preserved.
+    """
     conn = _test_engine.connect()
     with conn.begin():
+        conn.execute(text("DELETE FROM historial_cambios"))
         conn.execute(text("DELETE FROM procesos"))
     conn.close()
     yield
