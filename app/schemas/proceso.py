@@ -1,0 +1,76 @@
+"""Pydantic v2 schemas for procesos endpoints."""
+import math
+from datetime import datetime
+from decimal import Decimal
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+class CmnPorArea(BaseModel):
+    area: str
+    cmn_adjunto: Literal["SI", "NO"] = "NO"
+
+
+class ProcesoCreate(BaseModel):
+    requerimiento: str = Field(min_length=3)
+    tipo: Literal["BIEN", "SERVICIO"]
+    unidad_resp: str | None = None
+    areas_usuarias: list[str] = Field(min_length=1)
+    pim: Decimal | None = Field(default=None, ge=0)
+    anno: int = Field(ge=2020, le=2100)
+    cmn_por_area: list[CmnPorArea] = []
+
+    @field_validator("areas_usuarias")
+    @classmethod
+    def _no_vacias(cls, v: list[str]) -> list[str]:
+        if any(not a.strip() for a in v):
+            raise ValueError("área vacía no permitida")
+        return v
+
+
+class ProcesoUpdate(BaseModel):
+    """All fields optional — PATCH-like via PUT."""
+    requerimiento: str | None = None
+    tipo: Literal["BIEN", "SERVICIO"] | None = None
+    unidad_resp: str | None = None
+    areas_usuarias: list[str] | None = None
+    pim: Decimal | None = None
+    estado: Literal["EN PROCESO", "CULMINADO", "CANCELADO"] | None = None
+    motivo_cancel: str | None = None
+
+
+class ProcesoOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    id_proceso: str
+    requerimiento: str
+    tipo: str | None
+    unidad_resp: str | None
+    areas_usuarias: list[str] | None
+    pim: Decimal | None
+    estado: str
+    motivo_cancel: str | None
+    fecha_creacion: datetime
+    creado_por: str | None
+    anno: int | None
+
+
+class PaginatedProcesos(BaseModel):
+    items: list[ProcesoOut]
+    total: int
+    page: int
+    page_size: int
+    pages: int
+
+    @classmethod
+    def build(
+        cls,
+        items: list[ProcesoOut],
+        total: int,
+        page: int,
+        page_size: int,
+    ) -> "PaginatedProcesos":
+        pages = math.ceil(total / page_size) if page_size > 0 else 0
+        return cls(items=items, total=total, page=page, page_size=page_size, pages=pages)

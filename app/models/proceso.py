@@ -19,6 +19,7 @@ class Proceso(Base):
         ),
         Index("idx_procesos_anno", "anno"),
         Index("idx_procesos_estado", "estado"),
+        Index("idx_procesos_eliminado_en", "eliminado_en"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -35,3 +36,4 @@ class Proceso(Base):
     anno: Mapped[int | None] = mapped_column(
         Integer, server_default=text("EXTRACT(YEAR FROM NOW())")
     )
+    eliminado_en: Mapped[datetime | None] = mapped_column(TIMESTAMP)

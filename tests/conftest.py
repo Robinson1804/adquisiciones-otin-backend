@@ -74,6 +74,7 @@ def client(db_session):
 # Auth-specific fixtures
 # ---------------------------------------------------------------------------
 ADMIN_PASSWORD = "TestAdminPass1!"
+EDITOR_PASSWORD = "TestEditorPass1!"
 VIEWER_PASSWORD = "TestViewerPass1!"
 
 
@@ -91,6 +92,39 @@ def admin_usuario(db_session) -> Usuario:
     db_session.add(u)
     db_session.flush()
     return u
+
+
+@pytest.fixture(scope="function")
+def editor_usuario(db_session) -> Usuario:
+    """Active EDITOR user with a known password."""
+    u = Usuario(
+        username="testeditor",
+        nombre_completo="Test Editor",
+        rol="EDITOR",
+        activo=True,
+        area=None,
+        password_hash=hash_password(EDITOR_PASSWORD),
+    )
+    db_session.add(u)
+    db_session.flush()
+    return u
+
+
+@pytest.fixture(scope="function")
+def editor_token(client, editor_usuario) -> str:
+    """JWT for the editor test user."""
+    resp = client.post(
+        "/auth/login",
+        json={"username": editor_usuario.username, "password": EDITOR_PASSWORD},
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()["access_token"]
+
+
+@pytest.fixture(scope="function")
+def editor_headers(editor_token) -> dict:
+    """Authorization header dict for the editor test user."""
+    return {"Authorization": f"Bearer {editor_token}"}
 
 
 @pytest.fixture(scope="function")
