@@ -49,8 +49,53 @@ def _insert_etapa(db_session, proceso_id, cod, estado="COMPLETADO", **kwargs):
     return row
 
 
-def _cancel_proceso_via_e10(client, headers, proceso_id, motivo="Sin presupuesto"):
-    """Register E10 SIN_PRESUPUESTO to cancel the proceso."""
+def _insert_chain_prereqs_for_e10(db_session, proceso_id):
+    """Insert chain stages E01(COMPLETADO)→E09 directly so E10 can be registered.
+
+    C3c adds sequential prereqs to the main chain. Tests that register E10 via
+    the API must have E01-E09 COMPLETADO in the DB first.
+    E01 rows are created by proceso creation; we just mark them COMPLETADO.
+    E02-E09 are inserted directly for test setup.
+    """
+    from sqlalchemy import select
+    # Mark E01 rows COMPLETADO (already created by proceso creation)
+    e01_rows = db_session.execute(
+        select(EtapaRegistro).where(
+            EtapaRegistro.proceso_id == proceso_id,
+            EtapaRegistro.codigo_etapa == "E01",
+        )
+    ).scalars().all()
+    for r in e01_rows:
+        r.estado_etapa = "COMPLETADO"
+    db_session.flush()
+    # Insert E02-E09 chain stages (avoid duplicates — skip if already present)
+    existing = {
+        row.codigo_etapa
+        for row in db_session.execute(
+            select(EtapaRegistro).where(EtapaRegistro.proceso_id == proceso_id)
+        ).scalars().all()
+    }
+    chain_to_e09 = [
+        ("E02", {}), ("E03", {}), ("E04", {}), ("E07", {}),
+        ("E08", {"resultado_eval": "APROBADO"}),
+        ("E09", {"monto_cert": "1000.00"}),
+    ]
+    for cod, kw in chain_to_e09:
+        if cod not in existing:
+            _insert_etapa(db_session, proceso_id, cod, estado="COMPLETADO", **kw)
+    db_session.flush()
+
+
+def _cancel_proceso_via_e10(client, headers, proceso_id, motivo="Sin presupuesto",
+                            db_session=None):
+    """Register E10 SIN_PRESUPUESTO to cancel the proceso.
+
+    If db_session is provided, inserts the required chain prereqs (E01-E09)
+    so E10 can be registered via the API (C3c sequential chain enforcement).
+    """
+    if db_session is not None:
+        _insert_chain_prereqs_for_e10(db_session, proceso_id)
+
     resp = client.post(
         f"/procesos/{proceso_id}/etapas",
         json={
@@ -80,11 +125,11 @@ def _get_etapas(client, headers, proceso_id) -> dict:
 def test_reiniciar_tdr_happy(client, editor_headers, db_session):
     """CANCELADO proceso → POST reiniciar-tdr → 200; E02-E09 OMITIDO; new E02 PENDIENTE."""
     proc = _create_proceso(client, editor_headers)
-    # Insert E02-E09 rows to have something to OMIT
-    for cod in ["E02", "E03", "E04", "E05", "E09"]:
+    # Insert extra E02-E09 rows to have something to OMIT (chain prereqs added by _cancel_...)
+    for cod in ["E05"]:
         _insert_etapa(db_session, proc["id"], cod, estado="COMPLETADO")
 
-    _cancel_proceso_via_e10(client, editor_headers, proc["id"])
+    _cancel_proceso_via_e10(client, editor_headers, proc["id"], db_session=db_session)
 
     resp = client.post(
         f"/procesos/{proc['id']}/reiniciar-tdr",
@@ -100,9 +145,8 @@ def test_reiniciar_tdr_happy(client, editor_headers, db_session):
 def test_reiniciar_tdr_e02_e09_son_omitidos(client, editor_headers, db_session):
     """After reinicio, all prior E02-E09 rows have estado='OMITIDO'."""
     proc = _create_proceso(client, editor_headers)
-    for cod in ["E02", "E03", "E04"]:
-        _insert_etapa(db_session, proc["id"], cod, estado="COMPLETADO")
-    _cancel_proceso_via_e10(client, editor_headers, proc["id"])
+    # _cancel_proceso_via_e10 will insert E02-E09 chain; we verify E02/E03/E04 get omitted
+    _cancel_proceso_via_e10(client, editor_headers, proc["id"], db_session=db_session)
 
     client.post(f"/procesos/{proc['id']}/reiniciar-tdr", headers=editor_headers)
 
@@ -120,7 +164,7 @@ def test_reiniciar_tdr_e02_e09_son_omitidos(client, editor_headers, db_session):
 def test_reiniciar_tdr_preserva_e01(client, editor_headers, db_session):
     """After reinicio, E01 rows (CMN) are NOT affected — still as before."""
     proc = _create_proceso(client, editor_headers)
-    _cancel_proceso_via_e10(client, editor_headers, proc["id"])
+    _cancel_proceso_via_e10(client, editor_headers, proc["id"], db_session=db_session)
 
     client.post(f"/procesos/{proc['id']}/reiniciar-tdr", headers=editor_headers)
 
@@ -140,7 +184,7 @@ def test_reiniciar_tdr_preserva_e01(client, editor_headers, db_session):
 def test_reiniciar_tdr_proceso_estado_en_proceso(client, editor_headers, db_session):
     """After reinicio, proceso.estado = 'EN PROCESO' and motivo_cancel is None."""
     proc = _create_proceso(client, editor_headers)
-    _cancel_proceso_via_e10(client, editor_headers, proc["id"])
+    _cancel_proceso_via_e10(client, editor_headers, proc["id"], db_session=db_session)
 
     client.post(f"/procesos/{proc['id']}/reiniciar-tdr", headers=editor_headers)
 
@@ -153,7 +197,7 @@ def test_reiniciar_tdr_proceso_estado_en_proceso(client, editor_headers, db_sess
 def test_reiniciar_tdr_preserva_historial(client, editor_headers, db_session):
     """historial_cambios has entries from before + the new reinicio entry."""
     proc = _create_proceso(client, editor_headers)
-    _cancel_proceso_via_e10(client, editor_headers, proc["id"])
+    _cancel_proceso_via_e10(client, editor_headers, proc["id"], db_session=db_session)
 
     client.post(f"/procesos/{proc['id']}/reiniciar-tdr", headers=editor_headers)
 
@@ -172,7 +216,7 @@ def test_reiniciar_tdr_preserva_historial(client, editor_headers, db_session):
 def test_reiniciar_tdr_progreso_recalcula(client, editor_headers, db_session):
     """GET /etapas after reinicio → etapa_actual='E02', OMITIDO not counted."""
     proc = _create_proceso(client, editor_headers)
-    _cancel_proceso_via_e10(client, editor_headers, proc["id"])
+    _cancel_proceso_via_e10(client, editor_headers, proc["id"], db_session=db_session)
 
     client.post(f"/procesos/{proc['id']}/reiniciar-tdr", headers=editor_headers)
 
@@ -215,10 +259,10 @@ def test_reiniciar_tdr_cancelado_sin_e10_sin_presupuesto_409(client, editor_head
     assert resp.status_code == 409, resp.text
 
 
-def test_reiniciar_tdr_viewer_403(client, editor_headers, viewer_headers):
+def test_reiniciar_tdr_viewer_403(client, editor_headers, viewer_headers, db_session):
     """VIEWER POST reiniciar-tdr → 403."""
     proc = _create_proceso(client, editor_headers)
-    _cancel_proceso_via_e10(client, editor_headers, proc["id"])
+    _cancel_proceso_via_e10(client, editor_headers, proc["id"], db_session=db_session)
 
     resp = client.post(
         f"/procesos/{proc['id']}/reiniciar-tdr",
@@ -230,7 +274,7 @@ def test_reiniciar_tdr_viewer_403(client, editor_headers, viewer_headers):
 def test_reiniciar_tdr_idempotente(client, editor_headers, db_session):
     """Calling reiniciar-tdr twice: second call → 409 (proceso ya EN PROCESO)."""
     proc = _create_proceso(client, editor_headers)
-    _cancel_proceso_via_e10(client, editor_headers, proc["id"])
+    _cancel_proceso_via_e10(client, editor_headers, proc["id"], db_session=db_session)
 
     r1 = client.post(f"/procesos/{proc['id']}/reiniciar-tdr", headers=editor_headers)
     r2 = client.post(f"/procesos/{proc['id']}/reiniciar-tdr", headers=editor_headers)

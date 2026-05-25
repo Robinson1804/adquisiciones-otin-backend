@@ -78,6 +78,45 @@ def _post_etapa(client, headers, proceso_id, cod, nombre="Test", **extra):
     )
 
 
+def _setup_chain_prereqs(db_session, proceso_id, stop_before_cod):
+    """Insert all chain stages up to (not including) stop_before_cod as COMPLETADO.
+
+    C3c added sequential prereqs to the main chain. Tests that register a
+    mid-chain stage via the API need all prior stages present in DB.
+    E01 is already created by _create_proceso; we mark it COMPLETADO.
+    """
+    from app.services.etapas_catalogo import CADENA
+    existing = {
+        row.codigo_etapa
+        for row in db_session.execute(
+            select(EtapaRegistro).where(EtapaRegistro.proceso_id == proceso_id)
+        ).scalars().all()
+    }
+    for cod in CADENA:
+        if cod == stop_before_cod:
+            break
+        if cod == "E01":
+            _set_e01_completado(db_session, proceso_id)
+            continue
+        if cod in existing:
+            continue
+        kw = {}
+        if cod == "E08":
+            kw = {"resultado_eval": "APROBADO"}
+        elif cod == "E09":
+            kw = {"monto_cert": "1000.00"}
+        elif cod == "E10":
+            kw = {"resultado_eval": "CON_PRESUPUESTO"}
+        elif cod == "E11":
+            kw = {"area_usuaria": "DTDIS", "monto_cert": "500.00"}
+        elif cod == "E19":
+            kw = {"nro_ocs": "OCS-SETUP", "monto_ocs": "1000.00", "plazo_entrega": 30}
+        elif cod == "E22":
+            kw = {"fecha_inicio": "2026-01-01"}
+        _insert_etapa(db_session, proceso_id, cod, estado="COMPLETADO", **kw)
+    db_session.flush()
+
+
 # ---------------------------------------------------------------------------
 # R1 — E02 bloqueada sin CMN
 # ---------------------------------------------------------------------------
@@ -116,9 +155,10 @@ def test_r1_e02_happy_all_cmn_si(client, editor_headers, db_session):
 # R2 — E10 cancelación por SIN_PRESUPUESTO
 # ---------------------------------------------------------------------------
 
-def test_r2_e10_sin_presupuesto_no_motivo(client, editor_headers):
+def test_r2_e10_sin_presupuesto_no_motivo(client, editor_headers, db_session):
     """R2 BLOCKED: POST E10 SIN_PRESUPUESTO without motivo_cancel → 422."""
     proc = _create_proceso(client, editor_headers)
+    _setup_chain_prereqs(db_session, proc["id"], "E10")
     resp = _post_etapa(
         client, editor_headers, proc["id"], "E10",
         resultado_eval="SIN_PRESUPUESTO",
@@ -128,9 +168,10 @@ def test_r2_e10_sin_presupuesto_no_motivo(client, editor_headers):
     assert "motivo_cancel" in resp.json()["detail"].lower()
 
 
-def test_r2_e10_sin_presupuesto_with_motivo(client, editor_headers):
+def test_r2_e10_sin_presupuesto_with_motivo(client, editor_headers, db_session):
     """R2 HAPPY: POST E10 SIN_PRESUPUESTO with motivo_cancel → 201; proceso CANCELADO."""
     proc = _create_proceso(client, editor_headers)
+    _setup_chain_prereqs(db_session, proc["id"], "E10")
     resp = _post_etapa(
         client, editor_headers, proc["id"], "E10",
         resultado_eval="SIN_PRESUPUESTO",
@@ -144,9 +185,10 @@ def test_r2_e10_sin_presupuesto_with_motivo(client, editor_headers):
     assert proc_resp.json()["estado"] == "CANCELADO"
 
 
-def test_r2_e10_validado_no_cancel(client, editor_headers):
+def test_r2_e10_validado_no_cancel(client, editor_headers, db_session):
     """R2: POST E10 VALIDADO → 201; proceso stays EN PROCESO."""
     proc = _create_proceso(client, editor_headers)
+    _setup_chain_prereqs(db_session, proc["id"], "E10")
     resp = _post_etapa(
         client, editor_headers, proc["id"], "E10",
         resultado_eval="VALIDADO",
@@ -363,9 +405,10 @@ def test_r7_e09_happy_e08_aprobado(client, editor_headers, db_session):
 # R8 — E21 marca inicio del plazo (no bloquea)
 # ---------------------------------------------------------------------------
 
-def test_r8_e21_no_block(client, editor_headers):
+def test_r8_e21_no_block(client, editor_headers, db_session):
     """R8: POST E21 COMPLETADO → 201; no error, fecha_inicio stored."""
     proc = _create_proceso(client, editor_headers)
+    _setup_chain_prereqs(db_session, proc["id"], "E21")
     resp = _post_etapa(
         client, editor_headers, proc["id"], "E21",
         fecha_inicio="2026-07-01",
@@ -380,10 +423,11 @@ def test_r8_e21_no_block(client, editor_headers):
 # Proceso CANCELADO gate
 # ---------------------------------------------------------------------------
 
-def test_cancelado_proceso_blocks_all_etapas(client, editor_headers):
+def test_cancelado_proceso_blocks_all_etapas(client, editor_headers, db_session):
     """Any POST to CANCELADO proceso → 409."""
     proc = _create_proceso(client, editor_headers)
-    # Cancel the proceso via E10 SIN_PRESUPUESTO
+    # Cancel the proceso via E10 SIN_PRESUPUESTO (need chain prereqs E01-E09)
+    _setup_chain_prereqs(db_session, proc["id"], "E10")
     _post_etapa(
         client, editor_headers, proc["id"], "E10",
         resultado_eval="SIN_PRESUPUESTO",

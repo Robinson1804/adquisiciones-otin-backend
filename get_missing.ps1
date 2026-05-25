@@ -46,6 +46,7 @@ $packages = @{
     "cryptography" = "44.0.0"
     "cffi" = "1.17.1"
     "pycparser" = "2.22"
+    "python-multipart" = "0.0.20"
 }
 
 foreach ($pkg in $packages.Keys) {

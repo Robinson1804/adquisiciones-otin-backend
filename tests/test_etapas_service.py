@@ -125,6 +125,12 @@ def test_registrar_etapa_bucle_sets_es_bucle(db_session):
 def test_registrar_etapa_no_historial(db_session):
     """POST creates no historial_cambios row (audit is for PUT only)."""
     proc = _make_proceso(db_session)
+    # E03 prereq is E02; E02 prereq is E01 (with cmn_adjunto=SI)
+    _make_etapa(
+        db_session, proc.id, cod="E01",
+        estado="COMPLETADO", area_usuaria="DTDIS", cmn_adjunto="SI",
+    )
+    _make_etapa(db_session, proc.id, cod="E02", estado="COMPLETADO")
     payload = EtapaCreate(
         codigo_etapa="E03",
         nombre_etapa="Envío indagación",

@@ -70,6 +70,53 @@ def _get_montos(db_session, proceso_id) -> MontosProceso | None:
     ).scalars().first()
 
 
+def _setup_chain_up_to(db_session, proceso_id, stop_before_cod):
+    """Insert all chain stage rows up to (but not including) stop_before_cod.
+
+    C3c added sequential prereqs; tests that POST a mid-chain stage via the
+    API need all prior chain stages present in DB first.
+    E01 rows are already created by _create_proceso (cmn_por_area); mark COMPLETADO.
+    """
+    from app.services.etapas_catalogo import CADENA
+    existing_cods = {
+        row.codigo_etapa
+        for row in db_session.execute(
+            select(EtapaRegistro).where(EtapaRegistro.proceso_id == proceso_id)
+        ).scalars().all()
+    }
+    for cod in CADENA:
+        if cod == stop_before_cod:
+            break
+        if cod == "E01":
+            # Mark existing E01 rows COMPLETADO
+            for row in db_session.execute(
+                select(EtapaRegistro).where(
+                    EtapaRegistro.proceso_id == proceso_id,
+                    EtapaRegistro.codigo_etapa == "E01",
+                )
+            ).scalars().all():
+                row.estado_etapa = "COMPLETADO"
+            db_session.flush()
+            continue
+        if cod in existing_cods:
+            continue
+        kw = {}
+        if cod == "E08":
+            kw = {"resultado_eval": "APROBADO"}
+        elif cod == "E09":
+            kw = {"monto_cert": "1000.00"}
+        elif cod == "E10":
+            kw = {"resultado_eval": "CON_PRESUPUESTO"}
+        elif cod == "E11":
+            kw = {"area_usuaria": "DTDIS", "monto_cert": "500.00"}
+        elif cod == "E19":
+            kw = {"nro_ocs": "OCS-SETUP", "monto_ocs": "1000.00", "plazo_entrega": 30}
+        elif cod == "E22":
+            kw = {"fecha_inicio": "2026-01-01"}
+        _insert_etapa(db_session, proceso_id, cod, estado="COMPLETADO", **kw)
+    db_session.flush()
+
+
 # ---------------------------------------------------------------------------
 # E09 → valor_em
 # ---------------------------------------------------------------------------
@@ -127,9 +174,10 @@ def test_e12_sets_monto_cert_total(client, editor_headers, db_session):
 # E19 → nro_ocs, monto_ocs, plazo_entrega
 # ---------------------------------------------------------------------------
 
-def test_e19_sets_ocs_fields(client, editor_headers):
+def test_e19_sets_ocs_fields(client, editor_headers, db_session):
     """POST E19 COMPLETADO → nro_ocs, monto_ocs, plazo_entrega set; montos row created."""
     proc = _create_proceso(client, editor_headers)
+    _setup_chain_up_to(db_session, proc["id"], "E19")
     resp = _post_etapa(
         client, editor_headers, proc["id"], "E19",
         nro_ocs="OCS-2026-042",
@@ -143,6 +191,7 @@ def test_e19_sets_ocs_fields(client, editor_headers):
 def test_e19_montos_row_created(client, editor_headers, db_session):
     """POST E19 → montos_proceso row is created with correct OCS values."""
     proc = _create_proceso(client, editor_headers)
+    _setup_chain_up_to(db_session, proc["id"], "E19")
     resp = _post_etapa(
         client, editor_headers, proc["id"], "E19",
         nro_ocs="OCS-2026-042",
@@ -167,6 +216,7 @@ def test_e19_montos_row_created(client, editor_headers, db_session):
 def test_e22_sets_fecha_inicio_srv(client, editor_headers, db_session):
     """POST E22 COMPLETADO → montos.fecha_inicio_srv set."""
     proc = _create_proceso(client, editor_headers)
+    _setup_chain_up_to(db_session, proc["id"], "E22")
     resp = _post_etapa(
         client, editor_headers, proc["id"], "E22",
         fecha_inicio="2026-06-15",
@@ -186,6 +236,7 @@ def test_e22_sets_fecha_inicio_srv(client, editor_headers, db_session):
 def test_montos_upsert_second_trigger(client, editor_headers, db_session):
     """POST E22 twice → only one montos row, second call updates fecha_inicio_srv."""
     proc = _create_proceso(client, editor_headers)
+    _setup_chain_up_to(db_session, proc["id"], "E22")
     # First trigger
     resp1 = _post_etapa(
         client, editor_headers, proc["id"], "E22",
@@ -217,6 +268,7 @@ def test_montos_upsert_second_trigger(client, editor_headers, db_session):
 def test_non_trigger_stage_no_montos(client, editor_headers, db_session):
     """POST E03 COMPLETADO → no montos_proceso row created."""
     proc = _create_proceso(client, editor_headers)
+    _setup_chain_up_to(db_session, proc["id"], "E03")
     resp = _post_etapa(client, editor_headers, proc["id"], "E03")
     assert resp.status_code == 201, resp.text
 
@@ -255,9 +307,10 @@ def test_vencimiento_ocs_derivado(client, editor_headers, db_session):
 # GET /procesos/{id}/montos endpoint (C3b — ficha S4 display)
 # ---------------------------------------------------------------------------
 
-def test_get_montos_endpoint_returns_numbers(client, editor_headers):
+def test_get_montos_endpoint_returns_numbers(client, editor_headers, db_session):
     """GET /procesos/{id}/montos returns montos with Numeric fields as JSON numbers."""
     proc = _create_proceso(client, editor_headers)
+    _setup_chain_up_to(db_session, proc["id"], "E19")
     r = _post_etapa(
         client, editor_headers, proc["id"], "E19",
         nro_ocs="OCS-2026-077", monto_ocs="200000.00", plazo_entrega=45,

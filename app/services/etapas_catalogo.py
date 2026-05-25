@@ -7,10 +7,15 @@ Sin dependencias de BD ni I/O: importable en cualquier contexto (tests, scripts)
 
 Decisión de diseño (D1): NO tabla DB. Estático, versionado, testeable; las 27 filas
 cambian solo con deploy de código → no overhead de seed/migración/sincronía.
+
+C3c: Cadena principal (23 nodos) con prerequisito secuencial derivado via
+dataclasses.replace. Bucles (E05/E06/E08a/E08b) NO están en la cadena.
+acepta_adjuntos=True en 12 etapas clave que producen/reciben documentos formales.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import dataclasses
+from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
@@ -25,6 +30,7 @@ class EtapaSpec:
     es_fin: bool = False
     prerequisitos: tuple[str, ...] = ()
     alerta_dias: int | None = None
+    acepta_adjuntos: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -40,15 +46,18 @@ ETAPAS_CATALOGO: dict[str, EtapaSpec] = {
         nombre="Solicitud de requerimiento TIC (Áreas → OTIN)",
         campos_extra=("cmn_adjunto",),
         por_area=True,
+        acepta_adjuntos=True,
     ),
     "E02": EtapaSpec(
         cod="E02", orden=2, area_responsable="OTIN",
         nombre="Elaboración TDR consolidado (OTIN)",
         prerequisitos=("E01",),
+        acepta_adjuntos=True,
     ),
     "E03": EtapaSpec(
         cod="E03", orden=3, area_responsable="OTIN",
         nombre="Envío indagación de mercado (OTIN → OTA)",
+        acepta_adjuntos=True,
     ),
     "E04": EtapaSpec(
         cod="E04", orden=4, area_responsable="OTA",
@@ -72,6 +81,7 @@ ETAPAS_CATALOGO: dict[str, EtapaSpec] = {
         cod="E07", orden=7, area_responsable="OEAS",
         nombre="Evaluación técnica (OEAS → OTIN)",
         campos_extra=("resultado_eval",),
+        acepta_adjuntos=True,
     ),
     "E08": EtapaSpec(
         cod="E08", orden=8, area_responsable="OTIN",
@@ -95,6 +105,7 @@ ETAPAS_CATALOGO: dict[str, EtapaSpec] = {
         nombre="Cuadro comparativo (OEAS → OTIN)",
         campos_extra=("monto_cert",),
         prerequisitos=("E08",),
+        acepta_adjuntos=True,
     ),
     "E10": EtapaSpec(
         cod="E10", orden=12, area_responsable="OTIN",
@@ -106,6 +117,7 @@ ETAPAS_CATALOGO: dict[str, EtapaSpec] = {
         nombre="Solicitud cert. presupuestal (cada Área → OTIN)",
         campos_extra=("area_usuaria", "monto_cert"),
         por_area=True,
+        acepta_adjuntos=True,
     ),
     "E12": EtapaSpec(
         cod="E12", orden=14, area_responsable="OTIN",
@@ -115,20 +127,24 @@ ETAPAS_CATALOGO: dict[str, EtapaSpec] = {
     "E13": EtapaSpec(
         cod="E13", orden=15, area_responsable="OTIN",
         nombre="Envío consolidado a Secretaría General (OTIN → SG)",
+        acepta_adjuntos=True,
     ),
     "E14": EtapaSpec(
         cod="E14", orden=16, area_responsable="SEC_GENERAL",
         nombre="Aprobación Secretaría General (SG)",
+        acepta_adjuntos=True,
     ),
     "E15": EtapaSpec(
         cod="E15", orden=17, area_responsable="SEC_GENERAL",
         nombre="Envío a OTPP (Sec. General → OTPP)",
+        acepta_adjuntos=True,
     ),
     "E16": EtapaSpec(
         cod="E16", orden=18, area_responsable="OTPP",
         nombre="Certificación presupuestal — OTPP",
         campos_extra=("fecha_envio_otpp", "fecha_resp_otpp"),
         alerta_dias=20,
+        acepta_adjuntos=True,
     ),
     "E17": EtapaSpec(
         cod="E17", orden=19, area_responsable="OTPP",
@@ -142,6 +158,7 @@ ETAPAS_CATALOGO: dict[str, EtapaSpec] = {
         cod="E19", orden=21, area_responsable="OEAS",
         nombre="Emisión orden de compra/servicio (OEAS)",
         campos_extra=("nro_ocs", "monto_ocs", "plazo_entrega"),
+        acepta_adjuntos=True,
     ),
     "E20": EtapaSpec(
         cod="E20", orden=22, area_responsable="OEAS",
@@ -165,6 +182,7 @@ ETAPAS_CATALOGO: dict[str, EtapaSpec] = {
         campos_extra=("area_usuaria",),
         por_area=True,
         prerequisitos=("E23",),
+        acepta_adjuntos=True,
     ),
     "E25": EtapaSpec(
         cod="E25", orden=27, area_responsable="OTIN",
@@ -173,6 +191,33 @@ ETAPAS_CATALOGO: dict[str, EtapaSpec] = {
         es_fin=True,
     ),
 }
+
+# ---------------------------------------------------------------------------
+# C3c — Cadena principal secuencial (23 nodos; E05/E06/E08a/E08b excluidos)
+# Los prerequisitos se derivan programáticamente para no hardcodear 22 tuplas.
+# Cada nodo de la cadena requiere que su predecesor inmediato esté COMPLETADO.
+# E01 es raíz (sin prereq de cadena). E02 ya tenía ("E01",) — idéntico.
+# E05/E06 conservan ("E04",). E08a/E08b no se tocan.
+# ---------------------------------------------------------------------------
+
+CADENA: tuple[str, ...] = (
+    "E01", "E02", "E03", "E04", "E07", "E08", "E09", "E10", "E11", "E12",
+    "E13", "E14", "E15", "E16", "E17", "E18", "E19", "E20", "E21", "E22",
+    "E23", "E24", "E25",
+)
+
+for _i in range(1, len(CADENA)):
+    _cod, _prev = CADENA[_i], CADENA[_i - 1]
+    ETAPAS_CATALOGO[_cod] = dataclasses.replace(
+        ETAPAS_CATALOGO[_cod], prerequisitos=(_prev,)
+    )
+
+del _i, _cod, _prev  # clean up loop variables from module namespace
+
+# Set of stage codes that accept file attachments (12 key stages — C3c D8)
+CODIGOS_CON_ADJUNTOS: frozenset[str] = frozenset(
+    cod for cod, spec in ETAPAS_CATALOGO.items() if spec.acepta_adjuntos
+)
 
 # Canonical order list — used for sorting and progreso calculation.
 # E08a/E08b appear after E08 and before E09 (positions 9/10).

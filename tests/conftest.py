@@ -34,6 +34,9 @@ def _clean_business_tables():
     conn = _test_engine.connect()
     with conn.begin():
         conn.execute(text("DELETE FROM historial_cambios"))
+        # etapa_archivos cascades via etapas_registro → procesos, but delete
+        # explicitly as a defensive guard in case FK cascade order varies.
+        conn.execute(text("DELETE FROM etapa_archivos"))
         conn.execute(text("DELETE FROM procesos"))
     conn.close()
     yield
