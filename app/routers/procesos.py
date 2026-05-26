@@ -8,7 +8,7 @@ Design decisions implemented here:
 
 Service layer is inline (helpers prefixed _) per design §1 decision.
 """
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -70,9 +70,16 @@ def _crear_etapas_e01(
     areas: list[str],
     cmn_por_area: list[CmnPorArea],
     usuario: str,
+    fecha_solicitud: date | None = None,
 ) -> None:
-    """Insert one E01 etapas_registro row per area in areas_usuarias."""
+    """Insert one E01 etapas_registro row per area in areas_usuarias.
+
+    When fecha_solicitud is provided, E01 is auto-completed (COMPLETADO) with
+    that date — it is the kickoff of the process and the anchor of the timeline,
+    so it is not registered a second time by hand.
+    """
     cmn_map = {c.area: c.cmn_adjunto for c in cmn_por_area}
+    estado = "COMPLETADO" if fecha_solicitud is not None else "PENDIENTE"
     for area in areas:
         db.add(
             EtapaRegistro(
@@ -82,7 +89,8 @@ def _crear_etapas_e01(
                 area_responsable="AREAS",
                 area_usuaria=area,
                 cmn_adjunto=cmn_map.get(area, "NO"),
-                estado_etapa="PENDIENTE",
+                fecha_inicio=fecha_solicitud,
+                estado_etapa=estado,
                 registrado_por=usuario,
             )
         )
@@ -204,6 +212,7 @@ def create_proceso(
                 body.areas_usuarias,
                 body.cmn_por_area,
                 current_user.username,
+                body.fecha_solicitud,
             )
             db.commit()
             db.refresh(proceso)

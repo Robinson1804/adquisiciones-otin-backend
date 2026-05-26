@@ -20,6 +20,9 @@ class ProcesoCreate(BaseModel):
     pim: Decimal | None = Field(default=None, ge=0)
     anno: int = Field(default_factory=lambda: datetime.now().year, ge=2020, le=2100)
     cmn_por_area: list[CmnPorArea] = []
+    # When provided, E01 (Solicitud de requerimiento) is auto-registered as
+    # COMPLETADO with this date — the kickoff/anchor of the whole timeline.
+    fecha_solicitud: date | None = None
 
     @field_validator("areas_usuarias")
     @classmethod
