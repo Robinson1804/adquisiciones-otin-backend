@@ -220,13 +220,18 @@ def get_flujo_procesos(db: Session, anno: int) -> FlujoProcesosResponse:
         progreso = calcular_progreso(rows)
 
         if p.estado == "CULMINADO":
-            fase_actual = "F5"
-        elif progreso.etapa_actual and progreso.etapa_actual in COD_A_FASE:
-            fase_actual = fase_de_cod(progreso.etapa_actual)
+            # CULMINADO override: process is fully done; no "current" phase.
+            # porcentaje=100, fase_actual=None, all fases completada=True.
+            fase_actual = None
+            porcentaje = 100.0
         else:
-            fase_actual = "F1"
+            if progreso.etapa_actual and progreso.etapa_actual in COD_A_FASE:
+                fase_actual = fase_de_cod(progreso.etapa_actual)
+            else:
+                fase_actual = "F1"
+            porcentaje = progreso.porcentaje
 
-        fases = _build_fases_progreso(fase_actual, p.estado)
+        fases = _build_fases_progreso(fase_actual or "F5", p.estado)
 
         result.append(ProcesoFlujoOut(
             id=p.id,
@@ -234,7 +239,7 @@ def get_flujo_procesos(db: Session, anno: int) -> FlujoProcesosResponse:
             requerimiento=p.requerimiento,
             estado=p.estado,
             fase_actual=fase_actual,
-            porcentaje=progreso.porcentaje,
+            porcentaje=porcentaje,
             fases=fases,
         ))
 

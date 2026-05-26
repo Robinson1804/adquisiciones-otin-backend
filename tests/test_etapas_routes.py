@@ -327,3 +327,31 @@ def test_bucle_viewer_403(client, editor_headers, viewer_headers):
         headers=viewer_headers,
     )
     assert resp.status_code == 403, resp.text
+
+
+# ---------------------------------------------------------------------------
+# CULMINADO progreso override
+# ---------------------------------------------------------------------------
+
+def test_progreso_culminado_100(client, editor_headers, db_session):
+    """CULMINADO proceso → GET etapas progreso.porcentaje==100, etapa_actual==None.
+
+    Reproduces the bug where optional loop stages (E05/E06) that were never
+    completed caused a CULMINADO process to display as 92% / etapa_actual=E05.
+    """
+    proc = _create_proceso(client, editor_headers)
+
+    # Force estado=CULMINADO directly in the DB (mimics the real transition
+    # that happens when the final stage E25 is marked COMPLETADO).
+    db_session.execute(
+        Proceso.__table__.update()
+        .where(Proceso.id == proc["id"])
+        .values(estado="CULMINADO")
+    )
+    db_session.flush()
+
+    resp = client.get(f"/procesos/{proc['id']}/etapas", headers=editor_headers)
+    assert resp.status_code == 200, resp.text
+    progreso = resp.json()["progreso"]
+    assert progreso["porcentaje"] == 100.0
+    assert progreso["etapa_actual"] is None

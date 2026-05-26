@@ -211,11 +211,12 @@ def test_flujo_procesos_fase_from_etapa(db_session):
 
 
 def test_flujo_procesos_culminado(db_session):
-    """CULMINADO proceso → all 5 fases completada=True, actual=False."""
+    """CULMINADO proceso → fase_actual=None, porcentaje=100, all fases completada=True."""
     p = _create_proceso_direct(db_session, estado="CULMINADO")
     result = dashboard_service.get_flujo_procesos(db_session, 2026)
     proc = result.procesos[0]
-    assert proc.fase_actual == "F5"
+    assert proc.fase_actual is None
+    assert proc.porcentaje == 100.0
     for fase in proc.fases:
         assert fase.completada is True
         assert fase.actual is False

@@ -110,6 +110,13 @@ def get_etapas(
     )
     progreso = calcular_progreso(list(rows))
 
+    # CULMINADO override: process is fully finished regardless of optional
+    # loop stages (E05/E06) that may never have been completed.
+    if proceso.estado == "CULMINADO":
+        progreso = progreso.model_copy(
+            update={"porcentaje": 100.0, "etapa_actual": None}
+        )
+
     return EtapasResponseOut(etapas=etapas_agrupadas, progreso=progreso)
 
 
