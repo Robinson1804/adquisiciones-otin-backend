@@ -10,6 +10,7 @@ from app.routers import auth as auth_router
 from app.routers import etapas as etapas_router
 from app.routers import procesos as procesos_router
 from app.routers.archivos import router as archivos_router
+from app.routers import dashboard as dashboard_router
 
 app = FastAPI(title="Adquisiciones TIC API", version="0.1.0")
 
@@ -17,6 +18,7 @@ app.include_router(auth_router.router)
 app.include_router(procesos_router.router)
 app.include_router(etapas_router.router, tags=["etapas"])
 app.include_router(archivos_router)
+app.include_router(dashboard_router.router)
 
 app.add_middleware(
     CORSMiddleware,

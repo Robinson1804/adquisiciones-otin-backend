@@ -240,6 +240,38 @@ _BUCLE_CODS: frozenset[str] = frozenset(
 PROGRESO_DENOMINATOR: int = 25
 
 
+# ---------------------------------------------------------------------------
+# C4 — Fase groupings for the executive dashboard (5 business phases)
+# Source of truth for backend; mirrored in frontend/src/lib/fases.ts.
+# ---------------------------------------------------------------------------
+
+FASES: dict[str, dict] = {
+    "F1": {"orden": 1, "label": "Requerimiento y TDR"},
+    "F2": {"orden": 2, "label": "Indagación y Evaluación"},
+    "F3": {"orden": 3, "label": "Presupuesto y Certificación"},
+    "F4": {"orden": 4, "label": "Orden y Ejecución"},
+    "F5": {"orden": 5, "label": "Conformidad"},
+}
+
+COD_A_FASE: dict[str, str] = {
+    "E01": "F1", "E02": "F1",
+    "E03": "F2", "E04": "F2", "E05": "F2", "E06": "F2",
+    "E07": "F2", "E08": "F2", "E08a": "F2", "E08b": "F2", "E09": "F2",
+    "E10": "F3", "E11": "F3", "E12": "F3", "E13": "F3",
+    "E14": "F3", "E15": "F3", "E16": "F3",
+    "E17": "F4", "E18": "F4", "E19": "F4", "E20": "F4", "E21": "F4", "E22": "F4",
+    "E23": "F5", "E24": "F5", "E25": "F5",
+}
+
+
+def fase_de_cod(cod: str) -> str:
+    """Return the phase key (F1-F5) for a given stage code.
+
+    Raises KeyError if the code is not in COD_A_FASE.
+    """
+    return COD_A_FASE[cod]
+
+
 def get_etapa_spec(cod: str) -> EtapaSpec:
     """Return EtapaSpec for the given code. Raises KeyError if unknown."""
     return ETAPAS_CATALOGO[cod]
