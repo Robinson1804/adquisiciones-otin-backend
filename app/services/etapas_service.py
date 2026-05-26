@@ -59,6 +59,10 @@ def registrar_etapa(
 ) -> EtapaRegistro:
     """Insert a new etapas_registro row with C3b rule validation.
 
+    For por_area stages (E01, E11, E24): if a row already exists for the same
+    (proceso_id, codigo_etapa, area_usuaria), UPDATE it instead of INSERTing a
+    duplicate.  Simple and bucle stages always INSERT (unchanged behaviour).
+
     Calls validaciones before persisting; runs montos sync and state
     transitions after persisting (within the same transaction).
     """
@@ -95,6 +99,30 @@ def registrar_etapa(
     spec = ETAPAS_CATALOGO.get(cod)
     es_bucle = spec.es_bucle if spec else False
 
+    # --- Por-area idempotent upsert (E01, E11, E24) ---
+    # When the stage is per-area and area_usuaria is provided, check for an
+    # existing row.  If found, update it in place to avoid duplicate rows.
+    # Bucle stages are never por_area, so this branch never interferes with them.
+    if spec is not None and spec.por_area and payload.area_usuaria:
+        existing = db.execute(
+            select(EtapaRegistro).where(
+                EtapaRegistro.proceso_id == proceso_id,
+                EtapaRegistro.codigo_etapa == cod,
+                EtapaRegistro.area_usuaria == payload.area_usuaria,
+            )
+        ).scalars().first()
+
+        if existing is not None:
+            # UPDATE path: apply all provided fields and run post-persist hooks.
+            _upsert_por_area_fields(existing, payload, current_user_username)
+            db.flush()
+            sync_montos(db, proceso_id, cod, existing)
+            _aplicar_transicion_estado_proceso(
+                db, proceso_id, cod, payload, existing, current_user_username
+            )
+            return existing
+
+    # --- Normal INSERT path (simple, bucle, or first por_area row for an area) ---
     row = EtapaRegistro(
         proceso_id=proceso_id,
         codigo_etapa=cod,
@@ -130,6 +158,41 @@ def registrar_etapa(
     )
 
     return row
+
+
+def _upsert_por_area_fields(
+    row: EtapaRegistro,
+    payload: EtapaCreate,
+    current_user_username: str,
+) -> None:
+    """Apply mutable fields from payload onto an existing por_area row in place.
+
+    Only overwrites a field when the payload provides a non-None value, so
+    partial updates (e.g. only monto_cert changed) work correctly.
+    """
+    _updatable: tuple[str, ...] = (
+        "nombre_etapa",
+        "fecha_inicio",
+        "fecha_fin",
+        "estado_etapa",
+        "responsable",
+        "oficio_correo",
+        "observaciones",
+        "cmn_adjunto",
+        "monto_cert",
+        "resultado_eval",
+        "fecha_envio_otpp",
+        "fecha_resp_otpp",
+        "nro_ocs",
+        "monto_ocs",
+        "plazo_entrega",
+    )
+    for campo in _updatable:
+        nuevo = getattr(payload, campo, None)
+        if nuevo is not None:
+            setattr(row, campo, nuevo)
+    row.actualizado_por = current_user_username
+    row.actualizado_en = datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def actualizar_etapa(
