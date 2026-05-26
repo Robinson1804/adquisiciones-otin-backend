@@ -47,6 +47,11 @@ $packages = @{
     "cffi" = "1.17.1"
     "pycparser" = "2.22"
     "python-multipart" = "0.0.20"
+    # C5 export deps
+    "openpyxl" = "3.1.5"
+    "et-xmlfile" = "2.0.0"
+    "reportlab" = "4.2.5"
+    "pillow" = "11.0.0"
 }
 
 foreach ($pkg in $packages.Keys) {
