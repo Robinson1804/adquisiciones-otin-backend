@@ -110,8 +110,8 @@ def test_no_token_get_401(client, editor_headers):
 # GET /procesos/{id}/etapas — contract pin (APPLY-TIME RISK #1)
 # ---------------------------------------------------------------------------
 
-def test_get_agrupado_estructura_27_etapas(client, editor_headers):
-    """GET returns all 27 etapas in ORDEN_ETAPAS order + progreso block."""
+def test_get_agrupado_estructura_28_etapas(client, editor_headers):
+    """GET returns all 28 etapas (27 original + E06b) in ORDEN_ETAPAS order + progreso block."""
     from app.services.etapas_catalogo import ORDEN_ETAPAS
 
     proc = _create_proceso(client, editor_headers)
@@ -121,7 +121,7 @@ def test_get_agrupado_estructura_27_etapas(client, editor_headers):
     body = resp.json()
     assert "etapas" in body
     assert "progreso" in body
-    assert len(body["etapas"]) == 27
+    assert len(body["etapas"]) == 28
 
     cods = [e["cod"] for e in body["etapas"]]
     assert cods == ORDEN_ETAPAS

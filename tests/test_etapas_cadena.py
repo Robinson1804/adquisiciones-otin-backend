@@ -93,8 +93,8 @@ def test_e03_blocked_without_e02_completado(client, editor_headers, db_session):
     proc = _create_proceso(client, editor_headers)
     pid = proc["id"]
 
-    # E01 already created by proceso creation (cmn_por_area). E02 as EN CURSO.
-    _insert_etapa(db_session, pid, "E02", estado="EN CURSO")
+    # E01 already created by proceso creation (cmn_por_area). E02 as EN_CURSO.
+    _insert_etapa(db_session, pid, "E02", estado="EN_CURSO")
 
     resp = _register(client, pid, "E03", editor_headers)
     assert resp.status_code == 409, resp.json()

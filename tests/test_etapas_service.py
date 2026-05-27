@@ -97,13 +97,13 @@ def test_registrar_etapa_simple(db_session):
         codigo_etapa="E02",
         nombre_etapa="Elaboración TDR consolidado",
         fecha_inicio=date(2026, 6, 1),
-        estado_etapa="EN CURSO",
+        estado_etapa="EN_CURSO",
     )
     etapa = registrar_etapa(db_session, proc.id, payload, "editor1")
     assert etapa.id is not None
     assert etapa.proceso_id == proc.id
     assert etapa.codigo_etapa == "E02"
-    assert etapa.estado_etapa == "EN CURSO"
+    assert etapa.estado_etapa == "EN_CURSO"
     assert etapa.registrado_por == "editor1"
     assert etapa.nro_ronda == 1
 
@@ -201,7 +201,7 @@ def test_actualizar_etapa_changes_field(db_session):
 def test_auditoria_on_put(db_session):
     """PUT that changes estado_etapa creates historial_cambios row."""
     proc = _make_proceso(db_session)
-    etapa = _make_etapa(db_session, proc.id, cod="E02", estado="EN CURSO")
+    etapa = _make_etapa(db_session, proc.id, cod="E02", estado="EN_CURSO")
 
     payload = EtapaUpdate(estado_etapa="COMPLETADO")
     actualizar_etapa(db_session, etapa, payload, "editor1")
@@ -232,7 +232,7 @@ def test_auditoria_multiple_fields(db_session):
     proc = _make_proceso(db_session)
     etapa = _make_etapa(db_session, proc.id, cod="E03", estado="PENDIENTE")
 
-    payload = EtapaUpdate(estado_etapa="EN CURSO", responsable="Juan Perez")
+    payload = EtapaUpdate(estado_etapa="EN_CURSO", responsable="Juan Perez")
     actualizar_etapa(db_session, etapa, payload, "editor1")
 
     historial = db_session.execute(select(HistorialCambio)).scalars().all()
@@ -308,10 +308,10 @@ def test_calcular_progreso_una_completada():
 
 
 def test_calcular_progreso_parcial(db_session):
-    """E01 COMPLETADO, E02 EN CURSO → completadas=1, etapa_actual=E02."""
+    """E01 COMPLETADO, E02 EN_CURSO → completadas=1, etapa_actual=E02."""
     proc = _make_proceso(db_session)
     _make_etapa(db_session, proc.id, cod="E01", estado="COMPLETADO")
-    _make_etapa(db_session, proc.id, cod="E02", estado="EN CURSO")
+    _make_etapa(db_session, proc.id, cod="E02", estado="EN_CURSO")
 
     rows = db_session.execute(
         select(EtapaRegistro).where(EtapaRegistro.proceso_id == proc.id)
@@ -412,11 +412,11 @@ def test_calcular_progreso_por_area_una_pendiente(db_session):
 # agrupar_etapas — structure (contract pin per APPLY-TIME RISK #1)
 # ---------------------------------------------------------------------------
 
-def test_agrupar_etapas_returns_all_27(db_session):
-    """GET grouped structure returns all 27 etapas even with no rows."""
+def test_agrupar_etapas_returns_all_28(db_session):
+    """GET grouped structure returns all 28 etapas (27 original + E06b) even with no rows."""
     proc = _make_proceso(db_session)
     grupos = agrupar_etapas([])
-    assert len(grupos) == 27
+    assert len(grupos) == 28
 
 
 def test_agrupar_etapas_orden_correcto():

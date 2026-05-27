@@ -229,30 +229,34 @@ def validar_prerequisito_generico(
             )
         ).scalars().all()
 
+        # NO_APLICA satisfies prerequisites — the stage was intentionally skipped.
+        # OMITIDO is NOT equivalent (reserved for reinicio-TDR flow).
+        _SATISFIES = {"COMPLETADO", "NO_APLICA"}
+
         if prereq_spec.por_area:
-            # Todas las filas por área deben ser COMPLETADO
-            if not rows or not all(r.estado_etapa == "COMPLETADO" for r in rows):
+            # Todas las filas por área deben ser COMPLETADO o NO_APLICA
+            if not rows or not all(r.estado_etapa in _SATISFIES for r in rows):
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail=f"Prerequisito {prereq_cod} no completado para {cod}",
                 )
         elif prereq_spec.es_bucle:
-            # La última ronda debe ser COMPLETADO
+            # La última ronda debe ser COMPLETADO o NO_APLICA
             if not rows:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail=f"Prerequisito {prereq_cod} no completado para {cod}",
                 )
             last = max(rows, key=lambda r: r.nro_ronda)
-            if last.estado_etapa != "COMPLETADO":
+            if last.estado_etapa not in _SATISFIES:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail=f"Prerequisito {prereq_cod} no completado para {cod}",
                 )
         else:
-            # Etapa simple: debe existir una fila COMPLETADO
-            completada = any(r.estado_etapa == "COMPLETADO" for r in rows)
-            if not completada:
+            # Etapa simple: debe existir una fila COMPLETADO o NO_APLICA
+            satisfecha = any(r.estado_etapa in _SATISFIES for r in rows)
+            if not satisfecha:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail=f"Prerequisito {prereq_cod} no completado para {cod}",

@@ -76,25 +76,30 @@ def registrar_etapa(
         validar_r7_e09,
     )
 
-    # --- Gate: proceso must not be CANCELADO ---
+    # --- Gate: proceso must not be CANCELADO (always applies, even for NO_APLICA) ---
     validar_proceso_activo(db, proceso_id)
 
     cod = payload.codigo_etapa
 
-    # --- Generic prerequisite check (covers E02←E01, E09←E08, E12←E11, E25←E24) ---
-    validar_prerequisito_generico(db, proceso_id, cod)
+    # --- NO_APLICA fast-path: skip prereqs and all stage-specific rules ---
+    # A stage marked NO_APLICA is intentionally skipped (e.g. direct service order
+    # bypasses budget certification block E09-E18).  It still satisfies prerequisites
+    # for subsequent stages (handled in validar_prerequisito_generico).
+    if payload.estado_etapa != "NO_APLICA":
+        # --- Generic prerequisite check (covers E02←E01, E09←E08, E12←E11, E25←E24) ---
+        validar_prerequisito_generico(db, proceso_id, cod)
 
-    # --- Stage-specific rules ---
-    if cod == "E02":
-        validar_r1_e02(db, proceso_id)
-    if cod == "E10":
-        validar_r2_e10(db, proceso_id, payload)
-    if cod == "E12":
-        validar_r3_e12(db, proceso_id)
-    if cod == "E09":
-        validar_r7_e09(db, proceso_id)
-    if cod == "E25":
-        validar_r5_e25(db, proceso_id)
+        # --- Stage-specific rules ---
+        if cod == "E02":
+            validar_r1_e02(db, proceso_id)
+        if cod == "E10":
+            validar_r2_e10(db, proceso_id, payload)
+        if cod == "E12":
+            validar_r3_e12(db, proceso_id)
+        if cod == "E09":
+            validar_r7_e09(db, proceso_id)
+        if cod == "E25":
+            validar_r5_e25(db, proceso_id)
 
     spec = ETAPAS_CATALOGO.get(cod)
     es_bucle = spec.es_bucle if spec else False
@@ -512,18 +517,23 @@ def reiniciar_tdr(
 def calcular_progreso(etapas_rows: list[EtapaRegistro]) -> ProgresoOut:
     """Derive etapa_actual and progress % from etapas_registro rows.
 
-    Algorithm (Design D2):
+    Algorithm (Design D2 + NO_APLICA extension):
     - Iterate ORDEN_ETAPAS.
     - Per cod, gather all rows for that cod.
     - Estado consolidado = COMPLETADO if:
         - por_area=True → ALL rows are COMPLETADO (OMITIDO treated as non-completado)
         - es_bucle=True → last ronda (highest nro_ronda) is COMPLETADO
         - simple  → single row is COMPLETADO
-    - etapa_actual = first cod whose consolidated estado != COMPLETADO
-    - progreso % = (completadas / PROGRESO_DENOMINATOR) * 100
-    - PROGRESO_DENOMINATOR = 25 (loop cods E05/E06/E08a/E08b excluded from
-      denominator per Design D2; but only E08a and E08b are "extra" cods
-      that push ORDEN_ETAPAS beyond 25 — both are excluded from the count)
+    - Estado consolidado = NO_APLICA if all rows for that cod are NO_APLICA
+      (for simple and por_area stages; bucle: last ronda is NO_APLICA).
+    - etapa_actual = first cod whose consolidated estado is not COMPLETADO
+      and not NO_APLICA (skipped stages do not block the current pointer).
+    - progreso % = (completadas / denominator) * 100
+    - denominator = PROGRESO_DENOMINATOR (25) minus count of non-bucle stages
+      whose consolidated estado is NO_APLICA (minimum 1 to avoid division by zero).
+    - PROGRESO_DENOMINATOR = 25 (baseline; bucle cods excluded per Design D2).
+    - CULMINADO override: if proceso is CULMINADO the caller sets porcentaje=100
+      directly (handled in GET route, not here); here we just compute from rows.
     """
     # Group rows by codigo_etapa
     by_cod: dict[str, list[EtapaRegistro]] = {}
@@ -531,6 +541,7 @@ def calcular_progreso(etapas_rows: list[EtapaRegistro]) -> ProgresoOut:
         by_cod.setdefault(row.codigo_etapa, []).append(row)
 
     completadas = 0
+    no_aplica_count = 0  # non-bucle stages marked NO_APLICA
     etapa_actual: str | None = None
 
     for cod in ORDEN_ETAPAS:
@@ -540,24 +551,34 @@ def calcular_progreso(etapas_rows: list[EtapaRegistro]) -> ProgresoOut:
         estado = _estado_consolidado(spec, rows_for_cod)
 
         if estado == "COMPLETADO":
-            # Only count non-bucle cods in progress denominator
+            # Only count non-bucle cods in progress numerator
             if not spec.es_bucle:
                 completadas += 1
+        elif estado == "NO_APLICA":
+            # Non-bucle NO_APLICA stages are excluded from denominator
+            if not spec.es_bucle:
+                no_aplica_count += 1
+            # NO_APLICA does NOT block etapa_actual (skip it like COMPLETADO)
         else:
-            if etapa_actual is None:
+            # Bug #3 fix: bucle stages (E05/E06/E06b/E08a/E08b) are optional loops
+            # and must NEVER be chosen as etapa_actual, even when empty/PENDIENTE.
+            if etapa_actual is None and not spec.es_bucle:
                 etapa_actual = cod
 
     # Default to first stage when no rows at all
-    if etapa_actual is None and completadas == 0:
+    if etapa_actual is None and completadas == 0 and no_aplica_count == 0:
         etapa_actual = ORDEN_ETAPAS[0] if ORDEN_ETAPAS else None
 
-    porcentaje = round((completadas / PROGRESO_DENOMINATOR) * 100, 1)
+    # Dynamic denominator: subtract NO_APLICA stages from the base denominator
+    denominator = max(1, PROGRESO_DENOMINATOR - no_aplica_count)
+
+    porcentaje = round((completadas / denominator) * 100, 1)
 
     return ProgresoOut(
         etapa_actual=etapa_actual,
         porcentaje=porcentaje,
         completadas=completadas,
-        total=PROGRESO_DENOMINATOR,
+        total=denominator,
     )
 
 
@@ -566,6 +587,8 @@ def _estado_consolidado(spec, rows: list[EtapaRegistro]) -> str:
 
     OMITIDO rows are treated as non-completado (Design D3 — reinicio TDR
     marks them OMITIDO to preserve audit, but they don't count as done).
+    NO_APLICA: stage was intentionally skipped. Treated as satisfied for
+    prerequisites and excluded from the progress denominator.
     """
     if not rows:
         return "PENDIENTE"
@@ -576,10 +599,14 @@ def _estado_consolidado(spec, rows: list[EtapaRegistro]) -> str:
         return last.estado_etapa
 
     if spec.por_area:
-        # ALL rows must be COMPLETADO (OMITIDO is not COMPLETADO)
-        if all(r.estado_etapa == "COMPLETADO" for r in rows):
+        # ALL rows must be COMPLETADO or NO_APLICA
+        _done = {"COMPLETADO", "NO_APLICA"}
+        if all(r.estado_etapa in _done for r in rows):
+            # Distinguish: all NO_APLICA → return NO_APLICA; mixed/all COMPLETADO → COMPLETADO
+            if all(r.estado_etapa == "NO_APLICA" for r in rows):
+                return "NO_APLICA"
             return "COMPLETADO"
-        if any(r.estado_etapa in ("EN CURSO", "COMPLETADO") for r in rows):
+        if any(r.estado_etapa in ("EN_CURSO", "COMPLETADO") for r in rows):
             return "EN_CURSO"
         return "PENDIENTE"
 
@@ -613,17 +640,13 @@ def agrupar_etapas(
         rows = by_cod.get(cod, [])
         estado = _estado_consolidado(spec, rows)
 
-        # Normalize EN_CURSO vs EN CURSO (DB stores "EN CURSO" with space)
-        # EtapaAgrupadaOut.estado uses COMPLETADO|EN_CURSO|PENDIENTE (underscore)
-        estado_norm = _normalize_estado(estado)
-
         entry = EtapaAgrupadaOut(
             cod=cod,
             nombre=spec.nombre,
             area_responsable=spec.area_responsable,
             es_bucle=spec.es_bucle,
             por_area=spec.por_area,
-            estado=estado_norm,
+            estado=estado,
         )
 
         if spec.es_bucle:
@@ -640,11 +663,6 @@ def agrupar_etapas(
         result.append(entry)
 
     return result
-
-
-def _normalize_estado(estado: str) -> str:
-    """Normalize DB estado strings to underscore-separated form for JSON."""
-    return estado.replace(" ", "_")
 
 
 def _build_rondas(rows: list[EtapaRegistro]) -> list[RondaBucleOut]:

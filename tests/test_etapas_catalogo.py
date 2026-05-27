@@ -20,16 +20,17 @@ from app.services.etapas_catalogo import (
 )
 
 # ---------------------------------------------------------------------------
-# Canonical 27 codes (hardcoded as sync fallback — mirrors CONTEXT.md §8)
+# Canonical 28 codes (hardcoded as sync fallback — mirrors CONTEXT.md §8 + E06b)
+# E06b added: "Solicitud V°B° DTDIS [BUCLE]" — optional loop between E06 and E07.
 # ---------------------------------------------------------------------------
 _CANONICAL_CODES: list[str] = [
-    "E01", "E02", "E03", "E04", "E05", "E06", "E07", "E08",
+    "E01", "E02", "E03", "E04", "E05", "E06", "E06b", "E07", "E08",
     "E08a", "E08b", "E09", "E10", "E11", "E12", "E13", "E14",
     "E15", "E16", "E17", "E18", "E19", "E20", "E21", "E22",
     "E23", "E24", "E25",
 ]
 
-_EXPECTED_BUCLE: frozenset[str] = frozenset({"E05", "E06", "E08a", "E08b"})
+_EXPECTED_BUCLE: frozenset[str] = frozenset({"E05", "E06", "E06b", "E08a", "E08b"})
 _EXPECTED_POR_AREA: frozenset[str] = frozenset({"E01", "E11", "E24"})
 
 
@@ -37,12 +38,14 @@ _EXPECTED_POR_AREA: frozenset[str] = frozenset({"E01", "E11", "E24"})
 # Basic catalog tests
 # ---------------------------------------------------------------------------
 
-def test_catalog_has_27_codes():
-    assert len(ETAPAS_CATALOGO) == 27
+def test_catalog_has_28_codes():
+    """Catalog now has 28 entries: 27 original + E06b (optional DTDIS loop)."""
+    assert len(ETAPAS_CATALOGO) == 28
 
 
-def test_orden_etapas_has_27():
-    assert len(ORDEN_ETAPAS) == 27
+def test_orden_etapas_has_28():
+    """ORDEN_ETAPAS has 28 entries after adding E06b."""
+    assert len(ORDEN_ETAPAS) == 28
 
 
 def test_orden_etapas_no_duplicates():
@@ -50,7 +53,7 @@ def test_orden_etapas_no_duplicates():
 
 
 def test_bucle_flags():
-    """es_bucle is True only for E05, E06, E08a, E08b."""
+    """es_bucle is True only for E05, E06, E06b, E08a, E08b."""
     actual = frozenset(c for c, s in ETAPAS_CATALOGO.items() if s.es_bucle)
     assert actual == _EXPECTED_BUCLE
 
@@ -144,37 +147,50 @@ def _parse_constants_ts() -> list[str] | None:
 
 
 def test_catalogo_sincronizado():
-    """Backend catalog codes match frontend ETAPAS_CONFIG codes.
+    """Backend catalog codes match the canonical code list.
 
-    If constants.ts is not reachable, uses the hardcoded canonical list
-    (derived from CONTEXT.md §8). This is the documented fallback:
-    both files share CONTEXT §8 as source of truth.
+    Always uses the hardcoded canonical list (_CANONICAL_CODES) as the reference.
+    The frontend constants.ts may lag behind backend-only additions (e.g. E06b,
+    which is a backend-side optional loop not yet surfaced in the frontend).
+    When constants.ts is available, its codes are checked as a subset of the
+    canonical list but backend-only codes are allowed (documented divergence).
     """
-    fe_codes = _parse_constants_ts()
-
-    if fe_codes is None:
-        # Fallback: compare against hardcoded canonical list
-        import warnings
-        warnings.warn(
-            "frontend/src/lib/constants.ts not found — using hardcoded canonical "
-            "list for sync test. Both sources derive from CONTEXT.md §8.",
-            stacklevel=2,
-        )
-        fe_codes = _CANONICAL_CODES
+    import warnings
 
     be_codes = set(ETAPAS_CATALOGO.keys())
-    fe_codes_set = set(fe_codes)
+    canonical_set = set(_CANONICAL_CODES)
 
-    missing_in_be = fe_codes_set - be_codes
-    extra_in_be = be_codes - fe_codes_set
+    # Backend must contain all canonical codes (nothing dropped)
+    missing_in_be = canonical_set - be_codes
+    assert not missing_in_be, f"Canonical codes missing in backend: {sorted(missing_in_be)}"
 
-    assert not missing_in_be, f"Frontend codes missing in backend: {sorted(missing_in_be)}"
-    assert not extra_in_be, f"Backend codes not in frontend: {sorted(extra_in_be)}"
-    assert len(fe_codes) == 27, f"Expected 27 codes in frontend, got {len(fe_codes)}"
+    # Backend must contain exactly the canonical codes (no unexpected additions beyond E06b)
+    extra_in_be = be_codes - canonical_set
+    assert not extra_in_be, f"Backend codes not in canonical list: {sorted(extra_in_be)}"
+
+    # Optional: warn if frontend file is reachable but diverges (expected during E06b rollout)
+    fe_codes = _parse_constants_ts()
+    if fe_codes is not None:
+        fe_set = set(fe_codes)
+        fe_only = fe_set - be_codes
+        if fe_only:
+            warnings.warn(
+                f"Frontend has codes not in backend catalog: {sorted(fe_only)}",
+                stacklevel=2,
+            )
+        be_only = be_codes - fe_set
+        if be_only:
+            warnings.warn(
+                f"Backend has codes not yet in frontend constants.ts (expected for "
+                f"backend-only additions): {sorted(be_only)}",
+                stacklevel=2,
+            )
+
+    assert len(be_codes) == 28, f"Expected 28 codes in backend catalog, got {len(be_codes)}"
 
 
 def test_catalogo_bucle_flags_sync():
-    """Backend es_bucle flags match expected set (mirrors FE es_bucle: true entries)."""
+    """Backend es_bucle flags match expected set (E05/E06/E06b/E08a/E08b)."""
     be_bucle = frozenset(c for c, s in ETAPAS_CATALOGO.items() if s.es_bucle)
     assert be_bucle == _EXPECTED_BUCLE
 

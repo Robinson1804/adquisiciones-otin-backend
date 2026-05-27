@@ -270,7 +270,7 @@ def test_r4_e16_alerta_sin_respuesta_aun(client, editor_headers, db_session):
     envio = date.today() - timedelta(days=21)
     _insert_etapa(
         db_session, proc["id"], "E16",
-        estado="EN CURSO",
+        estado="EN_CURSO",
         fecha_envio_otpp=envio,
         fecha_resp_otpp=None,
     )

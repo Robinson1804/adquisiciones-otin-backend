@@ -432,9 +432,25 @@ def test_download_nonexistent_archivo(client, editor_headers):
 # ---------------------------------------------------------------------------
 
 def test_catalog_acepta_adjuntos_count():
-    """CODIGOS_CON_ADJUNTOS must match the 12-code spec exactly."""
+    """CODIGOS_CON_ADJUNTOS must match the expected set.
+
+    Updated set includes:
+    - E06 (loop TDR correction — accepts docs)
+    - E06b (new DTDIS visto-bueno loop)
+    - E08 (OTIN response to technical eval)
+    - E20 (provider notification)
+    - E22 (service start / goods delivery)
+    Previously False, now True per Part C requirements.
+    """
     from app.services.etapas_catalogo import CODIGOS_CON_ADJUNTOS
-    expected = {"E01", "E02", "E03", "E07", "E09", "E11", "E13", "E14", "E15", "E16", "E19", "E24"}
+    expected = {
+        "E01", "E02", "E03",
+        "E06", "E06b",
+        "E07", "E08", "E09",
+        "E11", "E13", "E14", "E15", "E16",
+        "E19", "E20",
+        "E22", "E24",
+    }
     assert CODIGOS_CON_ADJUNTOS == expected, f"Mismatch: {CODIGOS_CON_ADJUNTOS}"
 
 

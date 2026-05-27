@@ -1,16 +1,19 @@
-"""Catálogo de las 27 etapas del flujo de adquisición TIC.
+"""Catálogo de las 28 etapas del flujo de adquisición TIC.
 
 Config en código (dict Python frozen dataclasses). Espeja 1:1 a
 ETAPAS_CONFIG de frontend/src/lib/constants.ts — ambos derivan de CONTEXT.md §8.
 
 Sin dependencias de BD ni I/O: importable en cualquier contexto (tests, scripts).
 
-Decisión de diseño (D1): NO tabla DB. Estático, versionado, testeable; las 27 filas
+Decisión de diseño (D1): NO tabla DB. Estático, versionado, testeable; las 28 filas
 cambian solo con deploy de código → no overhead de seed/migración/sincronía.
 
 C3c: Cadena principal (23 nodos) con prerequisito secuencial derivado via
-dataclasses.replace. Bucles (E05/E06/E08a/E08b) NO están en la cadena.
-acepta_adjuntos=True en 12 etapas clave que producen/reciben documentos formales.
+dataclasses.replace. Bucles (E05/E06/E06b/E08a/E08b) NO están en la cadena.
+acepta_adjuntos=True en etapas clave que producen/reciben documentos formales.
+
+E06b: bucle opcional "Solicitud V°B° DTDIS (OTIN → DTDIS)" — fuera de cadena,
+orden 7 (entre E06 y E07). E07 en adelante renumerados +1.
 """
 from __future__ import annotations
 
@@ -76,108 +79,119 @@ ETAPAS_CATALOGO: dict[str, EtapaSpec] = {
         campos_extra=("motivo_bucle",),
         es_bucle=True,
         prerequisitos=("E04",),
+        acepta_adjuntos=True,
+    ),
+    "E06b": EtapaSpec(
+        cod="E06b", orden=7, area_responsable="BUCLE",
+        nombre="Solicitud V°B° DTDIS [BUCLE] (OTIN → DTDIS)",
+        campos_extra=("motivo_bucle",),
+        es_bucle=True,
+        acepta_adjuntos=True,
     ),
     "E07": EtapaSpec(
-        cod="E07", orden=7, area_responsable="OEAS",
+        cod="E07", orden=8, area_responsable="OEAS",
         nombre="Evaluación técnica (OEAS → OTIN)",
         campos_extra=("resultado_eval",),
         acepta_adjuntos=True,
     ),
     "E08": EtapaSpec(
-        cod="E08", orden=8, area_responsable="OTIN",
+        cod="E08", orden=9, area_responsable="OTIN",
         nombre="Respuesta OTIN a evaluación técnica (OTIN → OEAS)",
         campos_extra=("resultado_eval",),
+        acepta_adjuntos=True,
     ),
     "E08a": EtapaSpec(
-        cod="E08a", orden=9, area_responsable="BUCLE",
+        cod="E08a", orden=10, area_responsable="BUCLE",
         nombre="Observaciones al proveedor [BUCLE] (OEAS → Prov.)",
         campos_extra=("motivo_bucle",),
         es_bucle=True,
     ),
     "E08b": EtapaSpec(
-        cod="E08b", orden=10, area_responsable="BUCLE",
+        cod="E08b", orden=11, area_responsable="BUCLE",
         nombre="Subsanación + re-evaluación [BUCLE] (Prov→OEAS→OTIN)",
         campos_extra=("motivo_bucle",),
         es_bucle=True,
     ),
     "E09": EtapaSpec(
-        cod="E09", orden=11, area_responsable="OEAS",
+        cod="E09", orden=13, area_responsable="OEAS",
         nombre="Cuadro comparativo (OEAS → OTIN)",
         campos_extra=("monto_cert",),
         prerequisitos=("E08",),
         acepta_adjuntos=True,
     ),
     "E10": EtapaSpec(
-        cod="E10", orden=12, area_responsable="OTIN",
+        cod="E10", orden=14, area_responsable="OTIN",
         nombre="OTIN solicita anexo cert. + valida presupuesto (OTIN → Áreas)",
         campos_extra=("resultado_eval",),
     ),
     "E11": EtapaSpec(
-        cod="E11", orden=13, area_responsable="AREAS",
+        cod="E11", orden=15, area_responsable="AREAS",
         nombre="Solicitud cert. presupuestal (cada Área → OTIN)",
         campos_extra=("area_usuaria", "monto_cert"),
         por_area=True,
         acepta_adjuntos=True,
     ),
     "E12": EtapaSpec(
-        cod="E12", orden=14, area_responsable="OTIN",
+        cod="E12", orden=16, area_responsable="OTIN",
         nombre="Consolidación cert. presupuestales (OTIN)",
         prerequisitos=("E11",),
     ),
     "E13": EtapaSpec(
-        cod="E13", orden=15, area_responsable="OTIN",
+        cod="E13", orden=17, area_responsable="OTIN",
         nombre="Envío consolidado a Secretaría General (OTIN → SG)",
         acepta_adjuntos=True,
     ),
     "E14": EtapaSpec(
-        cod="E14", orden=16, area_responsable="SEC_GENERAL",
+        cod="E14", orden=18, area_responsable="SEC_GENERAL",
         nombre="Aprobación Secretaría General (SG)",
         acepta_adjuntos=True,
     ),
     "E15": EtapaSpec(
-        cod="E15", orden=17, area_responsable="SEC_GENERAL",
+        cod="E15", orden=19, area_responsable="SEC_GENERAL",
         nombre="Envío a OTPP (Sec. General → OTPP)",
         acepta_adjuntos=True,
     ),
     "E16": EtapaSpec(
-        cod="E16", orden=18, area_responsable="OTPP",
+        cod="E16", orden=20, area_responsable="OTPP",
         nombre="Certificación presupuestal — OTPP",
         campos_extra=("fecha_envio_otpp", "fecha_resp_otpp"),
         alerta_dias=20,
         acepta_adjuntos=True,
     ),
     "E17": EtapaSpec(
-        cod="E17", orden=19, area_responsable="OTPP",
+        cod="E17", orden=21, area_responsable="OTPP",
         nombre="OTPP envía a OTA (OTPP → OTA)",
     ),
     "E18": EtapaSpec(
-        cod="E18", orden=20, area_responsable="OTA",
+        cod="E18", orden=22, area_responsable="OTA",
         nombre="OTA deriva a OEAS (OTA → OEAS)",
     ),
     "E19": EtapaSpec(
-        cod="E19", orden=21, area_responsable="OEAS",
+        cod="E19", orden=23, area_responsable="OEAS",
         nombre="Emisión orden de compra/servicio (OEAS)",
         campos_extra=("nro_ocs", "monto_ocs", "plazo_entrega"),
         acepta_adjuntos=True,
     ),
     "E20": EtapaSpec(
-        cod="E20", orden=22, area_responsable="OEAS",
+        cod="E20", orden=24, area_responsable="OEAS",
         nombre="Notificación al proveedor (OEAS → Proveedor)",
+        acepta_adjuntos=True,
     ),
     "E21": EtapaSpec(
-        cod="E21", orden=23, area_responsable="PROVEEDOR",
+        cod="E21", orden=25, area_responsable="PROVEEDOR",
         nombre="Confirmación recepción OCS (Proveedor→OEAS→OTIN)",
     ),
     "E22": EtapaSpec(
-        cod="E22", orden=24, area_responsable="PROVEEDOR",
+        cod="E22", orden=26, area_responsable="PROVEEDOR",
         nombre="Inicio de servicio / entrega del bien",
+        acepta_adjuntos=True,
     ),
     "E23": EtapaSpec(
-        cod="E23", orden=25, area_responsable="OTIN",
+        cod="E23", orden=27, area_responsable="OTIN",
         nombre="OTIN solicita conformidad (OTIN → Áreas)",
     ),
     "E24": EtapaSpec(
-        cod="E24", orden=26, area_responsable="AREAS",
+        cod="E24", orden=28, area_responsable="AREAS",
         nombre="Conformidad área usuaria [por área] (Áreas → OTIN)",
         campos_extra=("area_usuaria",),
         por_area=True,
@@ -185,7 +199,7 @@ ETAPAS_CATALOGO: dict[str, EtapaSpec] = {
         acepta_adjuntos=True,
     ),
     "E25": EtapaSpec(
-        cod="E25", orden=27, area_responsable="OTIN",
+        cod="E25", orden=29, area_responsable="OTIN",
         nombre="Conformidad final consolidada (OTIN) FIN",
         prerequisitos=("E24",),
         es_fin=True,
@@ -193,11 +207,11 @@ ETAPAS_CATALOGO: dict[str, EtapaSpec] = {
 }
 
 # ---------------------------------------------------------------------------
-# C3c — Cadena principal secuencial (23 nodos; E05/E06/E08a/E08b excluidos)
+# C3c — Cadena principal secuencial (23 nodos; E05/E06/E06b/E08a/E08b excluidos)
 # Los prerequisitos se derivan programáticamente para no hardcodear 22 tuplas.
 # Cada nodo de la cadena requiere que su predecesor inmediato esté COMPLETADO.
 # E01 es raíz (sin prereq de cadena). E02 ya tenía ("E01",) — idéntico.
-# E05/E06 conservan ("E04",). E08a/E08b no se tocan.
+# E05/E06 conservan ("E04",). E06b/E08a/E08b no se tocan (bucles opcionales).
 # ---------------------------------------------------------------------------
 
 CADENA: tuple[str, ...] = (
@@ -214,13 +228,13 @@ for _i in range(1, len(CADENA)):
 
 del _i, _cod, _prev  # clean up loop variables from module namespace
 
-# Set of stage codes that accept file attachments (12 key stages — C3c D8)
+# Set of stage codes that accept file attachments (derived from acepta_adjuntos flag)
 CODIGOS_CON_ADJUNTOS: frozenset[str] = frozenset(
     cod for cod, spec in ETAPAS_CATALOGO.items() if spec.acepta_adjuntos
 )
 
 # Canonical order list — used for sorting and progreso calculation.
-# E08a/E08b appear after E08 and before E09 (positions 9/10).
+# Bucle stages (E05/E06/E06b/E08a/E08b) appear interleaved by their orden value.
 ORDEN_ETAPAS: list[str] = [
     spec.cod
     for spec in sorted(ETAPAS_CATALOGO.values(), key=lambda s: s.orden)
@@ -231,12 +245,12 @@ _BUCLE_CODS: frozenset[str] = frozenset(
     cod for cod, spec in ETAPAS_CATALOGO.items() if spec.es_bucle
 )
 
-# Denominator used by calcular_progreso: 25 (total 27 minus 2 extra: E08a + E08b
-# NOTE: 4 loop codes total (E05, E06, E08a, E08b). Design §D2 says "excludes
-# es_bucle cods" but uses 25 as denominator. That means E05 and E06 ARE counted
-# (they are distinct stages, just loopable). Only E08a and E08b are extras that
-# push total beyond 25. Verified: ORDEN_ETAPAS = 27 entries; non-bucle = 23;
-# design says denominator=25, so we keep 25 as the fixed constant per Design D2.
+# Base denominator used by calcular_progreso: 25 (total 28 entries minus 5 bucles:
+# E05, E06, E06b, E08a, E08b = 23 non-bucle stages; design §D2 says denominator=25,
+# meaning E05 and E06 ARE counted but E06b/E08a/E08b are extras beyond the 25 base).
+# The actual runtime denominator is DYNAMIC: 25 minus the count of non-bucle stages
+# marked NO_APLICA (see etapas_service.calcular_progreso). This constant is the
+# maximum possible denominator (all stages applicable).
 PROGRESO_DENOMINATOR: int = 25
 
 
@@ -255,7 +269,7 @@ FASES: dict[str, dict] = {
 
 COD_A_FASE: dict[str, str] = {
     "E01": "F1", "E02": "F1",
-    "E03": "F2", "E04": "F2", "E05": "F2", "E06": "F2",
+    "E03": "F2", "E04": "F2", "E05": "F2", "E06": "F2", "E06b": "F2",
     "E07": "F2", "E08": "F2", "E08a": "F2", "E08b": "F2", "E09": "F2",
     "E10": "F3", "E11": "F3", "E12": "F3", "E13": "F3",
     "E14": "F3", "E15": "F3", "E16": "F3",

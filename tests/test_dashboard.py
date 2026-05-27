@@ -31,14 +31,14 @@ from app.services import dashboard_service
 # ---------------------------------------------------------------------------
 
 def test_sync_fases_covers_all_catalog_keys():
-    """COD_A_FASE must cover exactly the 27 keys in ETAPAS_CATALOGO."""
+    """COD_A_FASE must cover exactly the 28 keys in ETAPAS_CATALOGO (27 + E06b)."""
     catalog_keys = set(ETAPAS_CATALOGO.keys())
     fase_keys = set(COD_A_FASE.keys())
     missing = catalog_keys - fase_keys
     extra = fase_keys - catalog_keys
     assert not missing, f"Codes in catalog but missing from COD_A_FASE: {sorted(missing)}"
     assert not extra, f"Codes in COD_A_FASE but not in catalog: {sorted(extra)}"
-    assert len(fase_keys) == 27
+    assert len(fase_keys) == 28
 
 
 def test_fase_de_cod_spot_checks():
@@ -182,18 +182,17 @@ def test_flujo_procesos_fase_from_etapa(db_session):
     """Proceso with F2 fully completed → fase_actual=F3.
 
     F2 cods (non-bucle): E03, E04, E07, E08, E09.
-    Bucles E05/E06/E08a/E08b are in F2 but calcular_progreso uses ORDEN_ETAPAS
-    order — E05 appears before E07 in ORDEN_ETAPAS and would be etapa_actual
-    unless we also insert E05/E06 as completed. To get F3, we need all of F2
-    including the bucle slots. Instead, we insert enough F3 etapas so that
-    etapa_actual falls in F3 (E12 or later).
+    Bucles E05/E06/E06b/E08a/E08b are in F2 — they appear in ORDEN_ETAPAS and
+    would become etapa_actual if not inserted as COMPLETADO. E06b was added as a
+    new optional DTDIS visto-bueno loop (orden=7, between E06 and E07).
     """
     p = _create_proceso_direct(db_session)
     # Complete all of F1 (E01, E02)
     for cod in ["E01", "E02"]:
         _insert_etapa(db_session, p.id, cod)
     # Complete all ORDEN_ETAPAS-ordered cods through E11 so etapa_actual = E12 (F3)
-    for cod in ["E03", "E04", "E05", "E06", "E07", "E08", "E08a", "E08b", "E09", "E10", "E11"]:
+    # E06b is included — it's a new bucle (F2) between E06 and E07
+    for cod in ["E03", "E04", "E05", "E06", "E06b", "E07", "E08", "E08a", "E08b", "E09", "E10", "E11"]:
         _insert_etapa(db_session, p.id, cod)
     # etapa_actual = E12 → F3
 
