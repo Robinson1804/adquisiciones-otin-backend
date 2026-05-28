@@ -29,6 +29,36 @@ class EtapaRegistro(Base):
         ),
         Index("idx_etapas_proceso", "proceso_id"),
         Index("idx_etapas_codigo", "codigo_etapa"),
+        # #1 — unicidad para etapas simples (no bucle, no por-área)
+        # OMITIDO se excluye: reinicio TDR archiva la fila vieja como OMITIDO
+        # y crea una nueva; ambas deben coexistir para auditoría.
+        Index(
+            "uq_etapa_simple_por_proceso",
+            "proceso_id",
+            "codigo_etapa",
+            unique=True,
+            postgresql_where=text(
+                "es_bucle = false AND area_usuaria IS NULL AND estado_etapa != 'OMITIDO'"
+            ),
+        ),
+        # #2 — unicidad para etapas por-área (E01, E11, E24)
+        Index(
+            "uq_etapa_por_area",
+            "proceso_id",
+            "codigo_etapa",
+            "area_usuaria",
+            unique=True,
+            postgresql_where=text("area_usuaria IS NOT NULL"),
+        ),
+        # #9 — unicidad para rondas de bucle
+        Index(
+            "uq_ronda_bucle",
+            "proceso_id",
+            "codigo_etapa",
+            "nro_ronda",
+            unique=True,
+            postgresql_where=text("es_bucle = true"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)

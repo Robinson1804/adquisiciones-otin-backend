@@ -16,6 +16,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 
 from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.models.etapa import EtapaRegistro
@@ -341,15 +342,9 @@ def sync_montos(
     if cod not in ("E09", "E12", "E19", "E22"):
         return
 
-    montos = db.execute(
-        select(MontosProceso).where(MontosProceso.proceso_id == proceso_id)
-    ).scalars().first()
-    if montos is None:
-        montos = MontosProceso(proceso_id=proceso_id)
-        db.add(montos)
-
+    # Build the set of columns to update depending on the trigger stage
     if cod == "E09":
-        montos.valor_em = etapa_row.monto_cert
+        update_values: dict = {"valor_em": etapa_row.monto_cert}
     elif cod == "E12":
         total = db.execute(
             select(func.sum(EtapaRegistro.monto_cert)).where(
@@ -357,14 +352,24 @@ def sync_montos(
                 EtapaRegistro.codigo_etapa == "E11",
             )
         ).scalar_one_or_none() or Decimal("0.00")
-        montos.monto_cert_total = total
+        update_values = {"monto_cert_total": total}
     elif cod == "E19":
-        montos.nro_ocs = etapa_row.nro_ocs
-        montos.monto_ocs = etapa_row.monto_ocs
-        montos.plazo_entrega = etapa_row.plazo_entrega
+        update_values = {
+            "nro_ocs": etapa_row.nro_ocs,
+            "monto_ocs": etapa_row.monto_ocs,
+            "plazo_entrega": etapa_row.plazo_entrega,
+        }
     elif cod == "E22":
-        montos.fecha_inicio_srv = etapa_row.fecha_inicio
+        update_values = {"fecha_inicio_srv": etapa_row.fecha_inicio}
+    else:
+        return  # unreachable but guard
 
+    stmt = pg_insert(MontosProceso).values(proceso_id=proceso_id, **update_values)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["proceso_id"],
+        set_=update_values,
+    )
+    db.execute(stmt)
     db.flush()
 
 

@@ -28,7 +28,7 @@ from app.services.etapas_catalogo import ETAPAS_CATALOGO
 # ---------------------------------------------------------------------------
 
 def validar_proceso_activo(db: Session, proceso_id: int) -> None:
-    """Bloquea el registro de nuevas etapas si el proceso está CANCELADO."""
+    """Bloquea el registro de nuevas etapas si el proceso está CANCELADO o CULMINADO."""
     proceso = db.get(Proceso, proceso_id)
     if proceso is None:
         return  # 404 se maneja en el router
@@ -36,6 +36,11 @@ def validar_proceso_activo(db: Session, proceso_id: int) -> None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Proceso cancelado. No se pueden agregar etapas.",
+        )
+    if proceso.estado == "CULMINADO":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Proceso culminado. No se pueden agregar etapas.",
         )
 
 
