@@ -437,7 +437,7 @@ def test_etapa_sin_fecha_limite_respuesta_es_null(client, editor_headers, db_ses
 
 
 def test_etapa_con_cmn_siga_confirmado(client, editor_headers, db_session):
-    """POST etapa with cmn_siga_confirmado=true persists the value."""
+    """POST etapa with cmn_siga_confirmado='SI' persists the value (tri-state, migration 0009)."""
     from app.models.etapa import EtapaRegistro
 
     proc = _create_proceso(client, editor_headers, areas=["DCOP"])
@@ -468,7 +468,7 @@ def test_etapa_con_cmn_siga_confirmado(client, editor_headers, db_session):
         "area_usuaria": "DCOP",
         "fecha_inicio": "2026-06-01",
         "estado_etapa": "COMPLETADO",
-        "cmn_siga_confirmado": True,
+        "cmn_siga_confirmado": "SI",
     }
     resp = client.post(
         f"/procesos/{proc['id']}/etapas",
@@ -477,4 +477,4 @@ def test_etapa_con_cmn_siga_confirmado(client, editor_headers, db_session):
     )
     assert resp.status_code == 201, resp.text
     data = resp.json()
-    assert data["cmn_siga_confirmado"] is True
+    assert data["cmn_siga_confirmado"] == "SI"

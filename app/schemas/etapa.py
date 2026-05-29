@@ -18,7 +18,11 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
+
+CmnSiga = Literal["SI", "NO", "EN_CURSO"] | None
 
 
 # ---------------------------------------------------------------------------
@@ -50,7 +54,10 @@ class EtapaCreate(BaseModel):
     motivo_cancel: str | None = None
     # flujo-real-otin-v2 (migration 0008)
     fecha_limite_respuesta: date | None = None
-    cmn_siga_confirmado: bool | None = None
+    # migration 0009: tri-state
+    cmn_siga_confirmado: CmnSiga = None
+    # migration 0009: editable round title
+    titulo_ronda: str | None = None
 
 
 class EtapaUpdate(BaseModel):
@@ -74,7 +81,10 @@ class EtapaUpdate(BaseModel):
     plazo_entrega: int | None = Field(default=None, ge=0)
     # flujo-real-otin-v2
     fecha_limite_respuesta: date | None = None
-    cmn_siga_confirmado: bool | None = None
+    # migration 0009: tri-state
+    cmn_siga_confirmado: CmnSiga = None
+    # migration 0009: editable round title
+    titulo_ronda: str | None = None
 
 
 class BucleCreate(BaseModel):
@@ -118,7 +128,10 @@ class EtapaOut(BaseModel):
     vencimiento_ocs: date | None = None
     # flujo-real-otin-v2
     fecha_limite_respuesta: date | None = None
-    cmn_siga_confirmado: bool | None = None
+    # migration 0009: tri-state
+    cmn_siga_confirmado: CmnSiga = None
+    # migration 0009: editable round title
+    titulo_ronda: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +175,8 @@ class RondaBucleOut(BaseModel):
     fecha_inicio: date | None
     fecha_fin: date | None
     dias: int | None
+    # migration 0009: editable round title
+    titulo_ronda: str | None = None
 
 
 class EtapaAgrupadaOut(BaseModel):

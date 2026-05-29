@@ -14,6 +14,7 @@ from sqlalchemy import (
     Text,
     TIMESTAMP,
 )
+# NOTE: Boolean kept for es_bucle; String used for cmn_siga_confirmado tri-state
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func, text
 
@@ -26,6 +27,10 @@ class EtapaRegistro(Base):
         CheckConstraint(
             "estado_etapa IN ('COMPLETADO','EN_CURSO','PENDIENTE','CANCELADO','OMITIDO','NO_APLICA')",
             name="ck_etapas_estado",
+        ),
+        CheckConstraint(
+            "cmn_siga_confirmado IN ('SI','NO','EN_CURSO') OR cmn_siga_confirmado IS NULL",
+            name="ck_etapas_cmn_siga_valido",
         ),
         Index("idx_etapas_proceso", "proceso_id"),
         Index("idx_etapas_codigo", "codigo_etapa"),
@@ -95,7 +100,10 @@ class EtapaRegistro(Base):
     fecha_resp_otpp: Mapped[date | None] = mapped_column(Date)
     # flujo-real-otin-v2 (migration 0008)
     fecha_limite_respuesta: Mapped[date | None] = mapped_column(Date, nullable=True)
-    cmn_siga_confirmado: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    # migration 0009: tri-state VARCHAR(10) — 'SI' | 'NO' | 'EN_CURSO' | NULL
+    cmn_siga_confirmado: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    # migration 0009: editable round title (only meaningful when es_bucle=True)
+    titulo_ronda: Mapped[str | None] = mapped_column(String(200), nullable=True)
     # Control fields
     responsable: Mapped[str | None] = mapped_column(String(150))
     oficio_correo: Mapped[str | None] = mapped_column(String(250))
