@@ -48,6 +48,9 @@ class EtapaCreate(BaseModel):
     plazo_entrega: int | None = Field(default=None, ge=0)
     # C3b: R2 — required when resultado_eval = 'SIN_PRESUPUESTO'
     motivo_cancel: str | None = None
+    # flujo-real-otin-v2 (migration 0008)
+    fecha_limite_respuesta: date | None = None
+    cmn_siga_confirmado: bool | None = None
 
 
 class EtapaUpdate(BaseModel):
@@ -69,6 +72,9 @@ class EtapaUpdate(BaseModel):
     nro_ocs: str | None = None
     monto_ocs: Decimal | None = Field(default=None, ge=0)
     plazo_entrega: int | None = Field(default=None, ge=0)
+    # flujo-real-otin-v2
+    fecha_limite_respuesta: date | None = None
+    cmn_siga_confirmado: bool | None = None
 
 
 class BucleCreate(BaseModel):
@@ -110,6 +116,9 @@ class EtapaOut(BaseModel):
     registrado_por: str | None
     # Derived — never stored; computed on read when codigo_etapa == 'E19'
     vencimiento_ocs: date | None = None
+    # flujo-real-otin-v2
+    fecha_limite_respuesta: date | None = None
+    cmn_siga_confirmado: bool | None = None
 
 
 # ---------------------------------------------------------------------------

@@ -37,3 +37,7 @@ class Proceso(Base):
         Integer, server_default=text("EXTRACT(YEAR FROM NOW())")
     )
     eliminado_en: Mapped[datetime | None] = mapped_column(TIMESTAMP)
+    # flujo-real-otin-v2 (migration 0008)
+    denominacion_cmn: Mapped[str | None] = mapped_column(Text, nullable=True)
+    clasificador_cmn: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    area_iniciadora: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -4,6 +4,7 @@ from app.models.etapa import EtapaRegistro
 from app.models.montos import MontosProceso
 from app.models.historial import HistorialCambio
 from app.models.archivo import EtapaArchivo
+from app.models.firma_secuencial import FirmaSecuencial
 
 __all__ = [
     "Usuario",
@@ -12,4 +13,5 @@ __all__ = [
     "MontosProceso",
     "HistorialCambio",
     "EtapaArchivo",
+    "FirmaSecuencial",
 ]

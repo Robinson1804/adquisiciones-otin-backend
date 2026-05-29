@@ -31,19 +31,26 @@ from app.services import dashboard_service
 # ---------------------------------------------------------------------------
 
 def test_sync_fases_covers_all_catalog_keys():
-    """COD_A_FASE must cover exactly the 28 keys in ETAPAS_CATALOGO (27 + E06b)."""
+    """COD_A_FASE must cover exactly all keys in ETAPAS_CATALOGO.
+
+    flujo-real-otin-v2: catalog has 32 entries (was 28).
+    """
     catalog_keys = set(ETAPAS_CATALOGO.keys())
     fase_keys = set(COD_A_FASE.keys())
     missing = catalog_keys - fase_keys
     extra = fase_keys - catalog_keys
     assert not missing, f"Codes in catalog but missing from COD_A_FASE: {sorted(missing)}"
     assert not extra, f"Codes in COD_A_FASE but not in catalog: {sorted(extra)}"
-    assert len(fase_keys) == 28
+    assert len(fase_keys) == len(catalog_keys)
 
 
 def test_fase_de_cod_spot_checks():
-    assert fase_de_cod("E01") == "F1"
+    """flujo-real-otin-v2: E01 removed; E01a/E01b/E01c replace it in F1."""
+    assert fase_de_cod("E01a") == "F1"
+    assert fase_de_cod("E01b") == "F1"
+    assert fase_de_cod("E01c") == "F1"
     assert fase_de_cod("E02") == "F1"
+    assert fase_de_cod("E02b") == "F1"
     assert fase_de_cod("E08a") == "F2"
     assert fase_de_cod("E09") == "F2"
     assert fase_de_cod("E10") == "F3"
@@ -179,20 +186,22 @@ def test_flujo_procesos_empty_year(db_session):
 
 
 def test_flujo_procesos_fase_from_etapa(db_session):
-    """Proceso with F2 fully completed → fase_actual=F3.
+    """Proceso with F1+F2 fully completed → fase_actual=F3.
 
+    flujo-real-otin-v2: F1 cods: E01a, E01b, E01c, E02, E02b.
     F2 cods (non-bucle): E03, E04, E07, E08, E09.
-    Bucles E05/E06/E06b/E08a/E08b are in F2 — they appear in ORDEN_ETAPAS and
-    would become etapa_actual if not inserted as COMPLETADO. E06b was added as a
-    new optional DTDIS visto-bueno loop (orden=7, between E06 and E07).
+    Bucles E05/E06/E06b/E06c/E08a/E08b are in F2.
     """
     p = _create_proceso_direct(db_session)
-    # Complete all of F1 (E01, E02)
-    for cod in ["E01", "E02"]:
+    # Complete all of F1 (E01a, E01b, E01c, E02, E02b)
+    _insert_etapa(db_session, p.id, "E01a")
+    _insert_etapa(db_session, p.id, "E01b")
+    _insert_etapa(db_session, p.id, "E01c", area_usuaria="DTDIS")
+    for cod in ["E02", "E02b"]:
         _insert_etapa(db_session, p.id, cod)
     # Complete all ORDEN_ETAPAS-ordered cods through E11 so etapa_actual = E12 (F3)
-    # E06b is included — it's a new bucle (F2) between E06 and E07
-    for cod in ["E03", "E04", "E05", "E06", "E06b", "E07", "E08", "E08a", "E08b", "E09", "E10", "E11"]:
+    # Bucles included to avoid them becoming etapa_actual
+    for cod in ["E03", "E04", "E05", "E06", "E06b", "E06c", "E07", "E08", "E08a", "E08b", "E09", "E10", "E11"]:
         _insert_etapa(db_session, p.id, cod)
     # etapa_actual = E12 → F3
 
@@ -222,11 +231,17 @@ def test_flujo_procesos_culminado(db_session):
 
 
 def test_flujo_procesos_cancelado(db_session):
-    """CANCELADO at E10 → fase_actual=F3; F4/F5 not completada."""
+    """CANCELADO with F1 done → fase_actual=F2; F4/F5 not completada.
+
+    flujo-real-otin-v2: F1 = E01a/E01b/E01c/E02/E02b.
+    """
     p = _create_proceso_direct(db_session, estado="CANCELADO")
-    # Only E01+E02 completed (F1 done, etapa_actual=E03 → F2)
-    _insert_etapa(db_session, p.id, "E01")
+    # Complete all of F1 → etapa_actual=E03 (first F2 stage)
+    _insert_etapa(db_session, p.id, "E01a")
+    _insert_etapa(db_session, p.id, "E01b")
+    _insert_etapa(db_session, p.id, "E01c", area_usuaria="DTDIS")
     _insert_etapa(db_session, p.id, "E02")
+    _insert_etapa(db_session, p.id, "E02b")
 
     result = dashboard_service.get_flujo_procesos(db_session, 2026)
     proc = result.procesos[0]
@@ -248,11 +263,14 @@ def test_tiempos_etapa_empty_year(db_session):
 
 
 def test_tiempos_etapa_avg_correct(db_session):
-    """AVG(dias) is computed correctly; OMITIDO excluded; bucles excluded."""
+    """AVG(dias) is computed correctly; OMITIDO excluded; bucles excluded.
+
+    flujo-real-otin-v2: E01 removed; use E01a instead.
+    """
     p = _create_proceso_direct(db_session)
-    # E01: dias = 5 (fecha_fin - fecha_inicio)
+    # E01a: dias = 5 (fecha_fin - fecha_inicio)
     _insert_etapa(
-        db_session, p.id, "E01",
+        db_session, p.id, "E01a",
         fecha_inicio=date(2026, 1, 1),
         fecha_fin=date(2026, 1, 6),  # 5 days
     )
@@ -280,8 +298,8 @@ def test_tiempos_etapa_avg_correct(db_session):
     result = dashboard_service.get_tiempos_etapa(db_session, 2026)
     assert len(result.etapas) >= 2
     by_cod = {e.codigo: e for e in result.etapas}
-    assert "E01" in by_cod
-    assert by_cod["E01"].dias_promedio == pytest.approx(5.0, abs=0.1)
+    assert "E01a" in by_cod  # flujo-real-otin-v2: E01a replaces E01
+    assert by_cod["E01a"].dias_promedio == pytest.approx(5.0, abs=0.1)
     assert "E02" in by_cod
     assert by_cod["E02"].dias_promedio == pytest.approx(10.0, abs=0.1)
     assert "E05" not in by_cod  # bucle excluded
@@ -289,10 +307,13 @@ def test_tiempos_etapa_avg_correct(db_session):
 
 
 def test_tiempos_etapa_promedio_global(db_session):
-    """promedio_global = AVG of individual stage averages."""
+    """promedio_global = AVG of individual stage averages.
+
+    flujo-real-otin-v2: E01 removed; use E01a instead.
+    """
     p = _create_proceso_direct(db_session)
     _insert_etapa(
-        db_session, p.id, "E01",
+        db_session, p.id, "E01a",
         fecha_inicio=date(2026, 1, 1),
         fecha_fin=date(2026, 1, 5),  # 4 days
     )

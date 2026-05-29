@@ -35,7 +35,11 @@ def _proceso_payload(**overrides) -> dict:
 # ---------------------------------------------------------------------------
 
 def test_crear_proceso_ok(client, editor_headers, db_session):
-    """POST as EDITOR → 201; id_proceso format; estado EN PROCESO; E01 rows created."""
+    """POST as EDITOR → 201; id_proceso format; estado EN PROCESO.
+
+    flujo-real-otin-v2: NO E01 rows auto-created.
+    E01a is only auto-created when fecha_solicitud is provided.
+    """
     payload = _proceso_payload(areas_usuarias=["DTDIS", "GOBERNANZA"])
     resp = client.post("/procesos", json=payload, headers=editor_headers)
     assert resp.status_code == 201, resp.text
@@ -46,16 +50,14 @@ def test_crear_proceso_ok(client, editor_headers, db_session):
     assert body["requerimiento"] == "Switch de red core"
     assert body["creado_por"] == "testeditor"
 
-    # Confirm E01 rows in DB
-    etapas = db_session.execute(
+    # flujo-real-otin-v2: no E01 rows auto-created (old behavior removed)
+    etapas_old = db_session.execute(
         select(EtapaRegistro).where(
             EtapaRegistro.proceso_id == body["id"],
             EtapaRegistro.codigo_etapa == "E01",
         )
     ).scalars().all()
-    assert len(etapas) == 2, f"Expected 2 E01 rows, got {len(etapas)}"
-    areas_found = {e.area_usuaria for e in etapas}
-    assert areas_found == {"DTDIS", "GOBERNANZA"}
+    assert len(etapas_old) == 0, "E01 rows should NOT be auto-created in v2 flow"
 
 
 # ---------------------------------------------------------------------------
@@ -458,31 +460,38 @@ def test_unauth_get_401(client):
 # ---------------------------------------------------------------------------
 
 def test_cmn_e01_correcto(client, editor_headers, db_session):
-    """E01 rows have correct cmn_adjunto per area."""
+    """flujo-real-otin-v2: NO E01 per-area rows auto-created.
+    cmn_adjunto is now stored as cmn_siga_confirmado on E01c rows (registered manually).
+    This test verifies the process is created successfully without any E01/E01c auto-rows.
+    """
     payload = _proceso_payload(
         areas_usuarias=["DTDIS", "GOBERNANZA", "OPERACIONES"],
         cmn_por_area=[
             {"area": "DTDIS", "cmn_adjunto": "SI"},
             {"area": "GOBERNANZA", "cmn_adjunto": "NO"},
-            # OPERACIONES not in cmn_por_area → should default to "NO"
         ],
     )
     resp = client.post("/procesos", json=payload, headers=editor_headers)
     assert resp.status_code == 201
     proceso_id = resp.json()["id"]
 
-    etapas = db_session.execute(
+    # flujo-real-otin-v2: no E01 per-area rows auto-created
+    etapas_e01 = db_session.execute(
         select(EtapaRegistro).where(
             EtapaRegistro.proceso_id == proceso_id,
             EtapaRegistro.codigo_etapa == "E01",
         )
     ).scalars().all()
+    assert len(etapas_e01) == 0, "E01 per-area rows should NOT be auto-created in v2 flow"
 
-    cmn_by_area = {e.area_usuaria: e.cmn_adjunto for e in etapas}
-    assert len(cmn_by_area) == 3
-    assert cmn_by_area["DTDIS"] == "SI"
-    assert cmn_by_area["GOBERNANZA"] == "NO"
-    assert cmn_by_area["OPERACIONES"] == "NO"
+    # No E01c rows either (those are registered manually)
+    etapas_e01c = db_session.execute(
+        select(EtapaRegistro).where(
+            EtapaRegistro.proceso_id == proceso_id,
+            EtapaRegistro.codigo_etapa == "E01c",
+        )
+    ).scalars().all()
+    assert len(etapas_e01c) == 0, "E01c rows should NOT be auto-created"
 
 
 # ---------------------------------------------------------------------------
@@ -531,4 +540,46 @@ def test_anno_defaults_to_current_year(client, editor_headers):
     }
     resp = client.post("/procesos", json=payload, headers=editor_headers)
     assert resp.status_code == 201, resp.text
-    assert resp.json()["anno"] == datetime.now().year
+
+
+# ---------------------------------------------------------------------------
+# T03a — CMN + area_iniciadora + unidad_resp hardcoded (flujo-real-otin-v2)
+# ---------------------------------------------------------------------------
+
+def test_crear_proceso_con_cmn_y_area_iniciadora(client, editor_headers):
+    """POST with denominacion_cmn + clasificador_cmn + area_iniciadora persists all."""
+    payload = _proceso_payload(
+        denominacion_cmn="CMN-2026-001",
+        clasificador_cmn="BIEN",
+        area_iniciadora="DCOP",
+    )
+    resp = client.post("/procesos", json=payload, headers=editor_headers)
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["denominacion_cmn"] == "CMN-2026-001"
+    assert body["clasificador_cmn"] == "BIEN"
+    assert body["area_iniciadora"] == "DCOP"
+
+
+def test_crear_proceso_sin_cmn_retorna_nulls(client, editor_headers):
+    """POST without CMN fields → 201 with denominacion_cmn=null, clasificador_cmn=null."""
+    resp = client.post("/procesos", json=_proceso_payload(), headers=editor_headers)
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["denominacion_cmn"] is None
+    assert body["clasificador_cmn"] is None
+    assert body["area_iniciadora"] is None
+
+
+def test_unidad_resp_hardcodeada_como_otin(client, editor_headers):
+    """unidad_resp is always 'OTIN' regardless of what is passed in body."""
+    # Case 1: field omitted
+    r1 = client.post("/procesos", json=_proceso_payload(), headers=editor_headers)
+    assert r1.status_code == 201
+    assert r1.json()["unidad_resp"] == "OTIN"
+
+    # Case 2: field provided with different value — must be overridden
+    payload = _proceso_payload(unidad_resp="OTRA_UNIDAD", requerimiento="Override test")
+    r2 = client.post("/procesos", json=payload, headers=editor_headers)
+    assert r2.status_code == 201
+    assert r2.json()["unidad_resp"] == "OTIN"

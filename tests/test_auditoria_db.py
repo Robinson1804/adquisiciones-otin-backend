@@ -88,11 +88,15 @@ class TestDuplicadoEtapaSimple:
         assert resp.status_code == 409, f"Esperaba 409, got {resp.status_code}: {resp.text}"
 
     def test_post_primer_registro_simple_ok(self, client, editor_headers, db_session):
-        """El primer registro de una etapa simple siempre debe funcionar."""
+        """El primer registro de una etapa simple siempre debe funcionar.
+
+        flujo-real-otin-v2: E03 prereq is E02b (not E02 directly).
+        Insert E02 and E02b COMPLETADO so E03 can be registered.
+        """
         proceso = _make_proceso(db_session, "EN PROCESO")
-        # Registrar E02 sin pre-condición (usamos etapa que no tiene prereqs críticos)
-        # E03 tiene prereq E02; usamos un proceso limpio con E02 ya marcado COMPLETADO
+        # flujo-real-otin-v2: E03 prereq chain is E02 → E02b
         _insert_etapa(db_session, proceso.id, "E02", estado_etapa="COMPLETADO")
+        _insert_etapa(db_session, proceso.id, "E02b", estado_etapa="COMPLETADO")
         db_session.commit()
 
         resp = _post_etapa(client, editor_headers, proceso.id, "E03")

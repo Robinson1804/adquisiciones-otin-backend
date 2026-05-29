@@ -93,6 +93,9 @@ class EtapaRegistro(Base):
     plazo_entrega: Mapped[int | None] = mapped_column(Integer)
     fecha_envio_otpp: Mapped[date | None] = mapped_column(Date)
     fecha_resp_otpp: Mapped[date | None] = mapped_column(Date)
+    # flujo-real-otin-v2 (migration 0008)
+    fecha_limite_respuesta: Mapped[date | None] = mapped_column(Date, nullable=True)
+    cmn_siga_confirmado: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     # Control fields
     responsable: Mapped[str | None] = mapped_column(String(150))
     oficio_correo: Mapped[str | None] = mapped_column(String(250))

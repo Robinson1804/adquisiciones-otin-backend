@@ -22,9 +22,11 @@ from app.models.etapa import EtapaRegistro
 from app.models.montos import MontosProceso
 from app.models.proceso import Proceso
 from app.models.usuario import Usuario
+from app.schemas.etapa import EtapaOut
 from app.schemas.proceso import (
     CmnPorArea,
     MontosOut,
+    OrdenServicioIn,
     PaginatedProcesos,
     ProcesoCreate,
     ProcesoOut,
@@ -37,7 +39,8 @@ router = APIRouter(prefix="/procesos", tags=["procesos"])
 # Private helpers (inline service layer — C2 design decision)
 # ---------------------------------------------------------------------------
 
-_E01_NOMBRE = "Solicitud de requerimiento TIC (Áreas → OTIN)"
+_E01_NOMBRE = "Solicitud de requerimiento TIC (Áreas → OTIN)"  # legacy — kept for migration refs
+_E01A_NOMBRE = "Solicitud inicial área iniciadora (Área → OTIN)"
 _MAX_ID_RETRIES = 3
 
 
@@ -71,29 +74,34 @@ def _crear_etapas_e01(
     cmn_por_area: list[CmnPorArea],
     usuario: str,
     fecha_solicitud: date | None = None,
+    area_iniciadora: str | None = None,
 ) -> None:
-    """Insert one E01 etapas_registro row per area in areas_usuarias.
+    """flujo-real-otin-v2: Auto-create E01a (single, non-por-area) when fecha_solicitud
+    is provided. The old per-area E01 pattern is superseded; E01c rows are registered
+    manually via POST /procesos/{id}/etapas.
 
-    When fecha_solicitud is provided, E01 is auto-completed (COMPLETADO) with
-    that date — it is the kickoff of the process and the anchor of the timeline,
-    so it is not registered a second time by hand.
+    When fecha_solicitud is provided and area_iniciadora is set, E01a is auto-completed
+    (COMPLETADO) — it is the kickoff/anchor of the timeline.
+    When fecha_solicitud is provided without area_iniciadora, E01a is still created
+    as COMPLETADO (using the first area as a fallback context).
     """
-    cmn_map = {c.area: c.cmn_adjunto for c in cmn_por_area}
-    estado = "COMPLETADO" if fecha_solicitud is not None else "PENDIENTE"
-    for area in areas:
-        db.add(
-            EtapaRegistro(
-                proceso_id=proceso_id,
-                codigo_etapa="E01",
-                nombre_etapa=_E01_NOMBRE,
-                area_responsable="AREAS",
-                area_usuaria=area,
-                cmn_adjunto=cmn_map.get(area, "NO"),
-                fecha_inicio=fecha_solicitud,
-                estado_etapa=estado,
-                registrado_por=usuario,
-            )
+    if fecha_solicitud is None:
+        # No auto-creation without a kickoff date — registro manual via API
+        return
+
+    db.add(
+        EtapaRegistro(
+            proceso_id=proceso_id,
+            codigo_etapa="E01a",
+            nombre_etapa=_E01A_NOMBRE,
+            area_responsable="AREAS",
+            area_usuaria=None,  # E01a is NOT por-area
+            fecha_inicio=fecha_solicitud,
+            estado_etapa="COMPLETADO",
+            registrado_por=usuario,
+            nro_ronda=1,
         )
+    )
 
 
 def _get_active_proceso_or_404(db: Session, proceso_id: int) -> Proceso:
@@ -197,12 +205,15 @@ def create_proceso(
                 id_proceso=id_proceso,
                 requerimiento=body.requerimiento,
                 tipo=body.tipo,
-                unidad_resp=body.unidad_resp,
+                unidad_resp="OTIN",  # always hardcoded — ignores body.unidad_resp
                 areas_usuarias=body.areas_usuarias,
                 pim=body.pim,
                 anno=body.anno,
                 estado="EN PROCESO",
                 creado_por=current_user.username,
+                denominacion_cmn=body.denominacion_cmn,
+                clasificador_cmn=body.clasificador_cmn,
+                area_iniciadora=body.area_iniciadora,
             )
             db.add(proceso)
             db.flush()  # assigns proceso.id without committing
@@ -213,6 +224,7 @@ def create_proceso(
                 body.cmn_por_area,
                 current_user.username,
                 body.fecha_solicitud,
+                body.area_iniciadora,
             )
             db.commit()
             db.refresh(proceso)
@@ -310,3 +322,89 @@ def delete_proceso(
     proceso.eliminado_en = datetime.now(timezone.utc).replace(tzinfo=None)
     db.commit()
     return {"message": "Proceso eliminado", "id": proceso_id}
+
+
+# ---------------------------------------------------------------------------
+# POST /procesos/{id}/registrar-orden-servicio — wizard batch O/S (T08b)
+# ---------------------------------------------------------------------------
+
+#: Stages created by the O/S wizard (E14-E20 in catalog order)
+_OS_ETAPAS: tuple[str, ...] = ("E14", "E15", "E16", "E17", "E18", "E19", "E20")
+
+
+@router.post(
+    "/{proceso_id}/registrar-orden-servicio",
+    response_model=list[EtapaOut],
+    status_code=status.HTTP_201_CREATED,
+)
+def registrar_orden_servicio(
+    proceso_id: int,
+    body: OrdenServicioIn,
+    db: Session = Depends(get_db),
+    current_user: Usuario = Depends(require_role("ADMIN", "EDITOR")),
+) -> list[EtapaOut]:
+    """Wizard: batch-register E14-E20 in a single transaction.
+
+    Preconditions:
+    - E13 must be COMPLETADO (or NO_APLICA) → 422 otherwise.
+    - E19 must not already exist → 409 otherwise.
+    All stages use body.fecha_os as fecha_inicio unless overridden via body.fechas_estimadas.
+    """
+    from app.models.etapa import EtapaRegistro
+    from app.services.etapas_catalogo import ETAPAS_CATALOGO
+
+    _get_active_proceso_or_404(db, proceso_id)
+
+    # Precondition: E13 COMPLETADO or NO_APLICA
+    e13 = db.execute(
+        select(EtapaRegistro).where(
+            EtapaRegistro.proceso_id == proceso_id,
+            EtapaRegistro.codigo_etapa == "E13",
+            EtapaRegistro.estado_etapa.in_(["COMPLETADO", "NO_APLICA"]),
+        )
+    ).scalar_one_or_none()
+    if e13 is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="E13 debe estar COMPLETADO o NO_APLICA antes de registrar la O/S.",
+        )
+
+    # Precondition: E19 must not exist
+    e19_exists = db.execute(
+        select(EtapaRegistro).where(
+            EtapaRegistro.proceso_id == proceso_id,
+            EtapaRegistro.codigo_etapa == "E19",
+        )
+    ).scalar_one_or_none()
+    if e19_exists is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="E19 ya existe — Orden de Servicio ya registrada para este proceso.",
+        )
+
+    fechas = body.fechas_estimadas or {}
+    created: list[EtapaRegistro] = []
+    for cod in _OS_ETAPAS:
+        spec = ETAPAS_CATALOGO.get(cod)
+        fecha = fechas.get(cod, body.fecha_os)
+        row = EtapaRegistro(
+            proceso_id=proceso_id,
+            codigo_etapa=cod,
+            nombre_etapa=spec.nombre if spec else f"Etapa {cod}",
+            area_responsable=spec.area_responsable if spec else "OTIN",
+            es_bucle=False,
+            nro_ronda=1,
+            estado_etapa="COMPLETADO",
+            fecha_inicio=fecha,
+            observaciones=body.observaciones,
+            registrado_por=current_user.username,
+        )
+        db.add(row)
+        created.append(row)
+
+    db.flush()
+    db.commit()
+    for row in created:
+        db.refresh(row)
+
+    return [EtapaOut.model_validate(row) for row in created]

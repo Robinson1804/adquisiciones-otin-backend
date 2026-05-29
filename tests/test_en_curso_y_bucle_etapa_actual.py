@@ -105,21 +105,16 @@ class TestEnCursoEstandarizado:
     """Bug #1: POST con EN_CURSO no viola CHECK constraint."""
 
     def test_post_en_curso_no_viola_constraint(self, client, editor_headers, db_session):
-        """(a) POST /procesos/{id}/etapas con estado_etapa='EN_CURSO' → 201."""
+        """(a) POST /procesos/{id}/etapas con estado_etapa='EN_CURSO' → 201.
+
+        flujo-real-otin-v2: prereq chain for E02 is E01a→E01b→E01c.
+        """
         proc = _create_proceso(client, editor_headers)
         pid = proc["id"]
 
-        # Marcar E01 COMPLETADO para satisfacer prereq de E02
-        from sqlalchemy import select as sa_select
-        e01_rows = db_session.execute(
-            sa_select(EtapaRegistro).where(
-                EtapaRegistro.proceso_id == pid,
-                EtapaRegistro.codigo_etapa == "E01",
-            )
-        ).scalars().all()
-        for r in e01_rows:
-            r.estado_etapa = "COMPLETADO"
-        db_session.flush()
+        # flujo-real-otin-v2: insert E01a/E01b/E01c COMPLETADO to satisfy prereq for E02
+        for cod, kw in [("E01a", {}), ("E01b", {}), ("E01c", {"area_usuaria": "DTDIS"})]:
+            _insert_row(db_session, pid, cod, estado="COMPLETADO", **kw)
 
         resp = client.post(
             f"/procesos/{pid}/etapas",
@@ -192,10 +187,15 @@ class TestEnCursoEstandarizado:
         )
 
     def test_service_registrar_etapa_en_curso(self, db_session):
-        """(a) Service layer: registrar_etapa con EN_CURSO persiste correctamente."""
+        """(a) Service layer: registrar_etapa con EN_CURSO persiste correctamente.
+
+        flujo-real-otin-v2: E01a/E01b/E01c needed as prereqs for E02.
+        """
         p = _make_proceso_direct(db_session)
-        # E01 necesario para prereq de E02
-        _insert_row(db_session, p.id, "E01", estado="COMPLETADO", area_usuaria="DTDIS", cmn_adjunto="SI")
+        # flujo-real-otin-v2: insert E01a/E01b/E01c COMPLETADO
+        _insert_row(db_session, p.id, "E01a", estado="COMPLETADO")
+        _insert_row(db_session, p.id, "E01b", estado="COMPLETADO")
+        _insert_row(db_session, p.id, "E01c", estado="COMPLETADO", area_usuaria="DTDIS")
 
         payload = EtapaCreate(
             codigo_etapa="E02",
@@ -227,28 +227,34 @@ class TestEtapaActualNoBucle:
     """Bug #3: calcular_progreso no elige etapas es_bucle como etapa_actual."""
 
     def test_etapa_actual_no_es_bucle_vacio(self):
-        """(d) Con E08a/E08b vacíos (PENDIENTE implícito), etapa_actual NO es E08a."""
-        # Simula proceso con E01-E07 COMPLETADO, bucles E08a/E08b sin filas.
+        """(d) Con E08a/E08b vacíos (PENDIENTE implícito), etapa_actual NO es E08a.
+
+        flujo-real-otin-v2: chain starts at E01a; use new codes.
+        """
+        # Simula proceso con E01a/E01b/E01c/E02/E02b/E03/E04/E07 COMPLETADO
         rows: list[EtapaRegistro] = []
-        for cod in ["E01", "E02", "E03", "E04", "E07"]:
+        for cod in ["E01a", "E01b", "E01c", "E02", "E02b", "E03", "E04", "E07"]:
             rows.append(_make_row(cod, "COMPLETADO", es_bucle=False))
 
         progreso = calcular_progreso(rows)
 
-        # E05/E06/E06b/E08a/E08b son bucles y no deben ser etapa_actual
+        # E05/E06/E06b/E06c/E08a/E08b son bucles y no deben ser etapa_actual
         bucle_cods = {cod for cod, spec in ETAPAS_CATALOGO.items() if spec.es_bucle}
         assert progreso.etapa_actual not in bucle_cods, (
             f"etapa_actual={progreso.etapa_actual!r} es un bucle — Bug #3 no arreglado"
         )
 
     def test_etapa_actual_salta_e08a_e08b_vacios(self):
-        """(d) E08a/E08b vacíos → etapa_actual debe ser E08 (primera no-bucle pendiente)."""
+        """(d) E08a/E08b vacíos → etapa_actual debe ser E08 (primera no-bucle pendiente).
+
+        flujo-real-otin-v2: chain starts at E01a.
+        """
         rows: list[EtapaRegistro] = []
-        # E01-E07 COMPLETADO (no-bucle)
-        for cod in ["E01", "E02", "E03", "E04", "E07"]:
+        # E01a/E01b/E01c/E02/E02b/E03/E04/E07 COMPLETADO (no-bucle)
+        for cod in ["E01a", "E01b", "E01c", "E02", "E02b", "E03", "E04", "E07"]:
             rows.append(_make_row(cod, "COMPLETADO", es_bucle=False))
-        # E05/E06/E06b sin filas → PENDIENTE consolidado pero son bucles → ignorados
-        # E08a/E08b sin filas → PENDIENTE consolidado pero son bucles → ignorados
+        # E05/E06/E06b/E06c sin filas → bucles → ignorados
+        # E08a/E08b sin filas → bucles → ignorados
         # → primera no-bucle pendiente es E08
 
         progreso = calcular_progreso(rows)
@@ -258,17 +264,20 @@ class TestEtapaActualNoBucle:
         )
 
     def test_etapa_actual_salta_bucles_con_ronda_pendiente(self):
-        """(d) Un bucle con ronda en PENDIENTE tampoco debe ser etapa_actual."""
+        """(d) Un bucle con ronda en PENDIENTE tampoco debe ser etapa_actual.
+
+        flujo-real-otin-v2: chain starts at E01a.
+        """
         rows: list[EtapaRegistro] = []
-        # E01-E04 COMPLETADO
-        for cod in ["E01", "E02", "E03", "E04"]:
+        # E01a/E01b/E01c/E02/E02b/E03/E04 COMPLETADO
+        for cod in ["E01a", "E01b", "E01c", "E02", "E02b", "E03", "E04"]:
             rows.append(_make_row(cod, "COMPLETADO", es_bucle=False))
         # E05 bucle con ronda PENDIENTE — NO debe ser etapa_actual
         rows.append(_make_row("E05", "PENDIENTE", es_bucle=True, nro_ronda=1))
 
         progreso = calcular_progreso(rows)
         # etapa_actual debe ser E07 (primer no-bucle no-COMPLETADO después de E04)
-        assert progreso.etapa_actual not in {"E05", "E06", "E06b", "E08a", "E08b"}, (
+        assert progreso.etapa_actual not in {"E05", "E06", "E06b", "E06c", "E08a", "E08b"}, (
             f"etapa_actual={progreso.etapa_actual!r} es un bucle — Bug #3"
         )
         assert progreso.etapa_actual == "E07", (
@@ -276,22 +285,28 @@ class TestEtapaActualNoBucle:
         )
 
     def test_etapa_actual_escenario_e2e_hasta_e25(self, db_session):
-        """(e) Proceso real: E01-E07 + E08 + algunos hasta E25 COMPLETADO.
+        """(e) Proceso real: E01a/b/c/E02/E02b/E03-E07 + E08 + algunos hasta E18 COMPLETADO.
 
         Verifica que etapa_actual sea la primera etapa NO-bucle no completada,
         nunca E08a ni E08b.
+        flujo-real-otin-v2: chain starts at E01a.
         """
         p = _make_proceso_direct(db_session)
 
-        # E01-E07, E08 COMPLETADO (no-bucle); E08a/E08b sin filas (bucles opcionales)
-        for cod in ["E01", "E02", "E03", "E04", "E07", "E08"]:
+        # flujo-real-otin-v2 chain head: E01a/E01b/E01c COMPLETADO
+        _insert_row(db_session, p.id, "E01a", estado="COMPLETADO")
+        _insert_row(db_session, p.id, "E01b", estado="COMPLETADO")
+        _insert_row(db_session, p.id, "E01c", estado="COMPLETADO", area_usuaria="DTDIS")
+
+        # E02/E02b/E03/E04/E07, E08 COMPLETADO; E08a/E08b sin filas (bucles opcionales)
+        for cod in ["E02", "E02b", "E03", "E04", "E07", "E08"]:
             _insert_row(db_session, p.id, cod, estado="COMPLETADO")
 
-        # E09-E24 algunos COMPLETADO, el resto pendiente
+        # E09-E18 COMPLETADO
         for cod in ["E09", "E10", "E11", "E12", "E13", "E14", "E15", "E16", "E17", "E18"]:
             _insert_row(db_session, p.id, cod, estado="COMPLETADO")
 
-        # E19-E24 PENDIENTE/sin fila → E19 es la siguiente
+        # E19-E25 PENDIENTE/sin fila → E19 es la siguiente no-bucle pendiente
         rows = db_session.execute(
             select(EtapaRegistro).where(EtapaRegistro.proceso_id == p.id)
         ).scalars().all()

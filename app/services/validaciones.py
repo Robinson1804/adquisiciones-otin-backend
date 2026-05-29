@@ -45,27 +45,6 @@ def validar_proceso_activo(db: Session, proceso_id: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# R1 — E02: bloquear si alguna fila E01 tiene cmn_adjunto != 'SI'
-# ---------------------------------------------------------------------------
-
-def validar_r1_e02(db: Session, proceso_id: int) -> None:
-    """R1: E02 requiere que TODAS las áreas tengan cmn_adjunto = 'SI'."""
-    filas_sin_cmn = db.execute(
-        select(EtapaRegistro.area_usuaria).where(
-            EtapaRegistro.proceso_id == proceso_id,
-            EtapaRegistro.codigo_etapa == "E01",
-            EtapaRegistro.cmn_adjunto != "SI",
-        )
-    ).scalars().all()
-    if filas_sin_cmn:
-        areas = ", ".join(a for a in filas_sin_cmn if a)
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"No se puede registrar E02: áreas sin CMN: {areas}",
-        )
-
-
-# ---------------------------------------------------------------------------
 # R2 — E10: motivo_cancel requerido cuando resultado = SIN_PRESUPUESTO
 # ---------------------------------------------------------------------------
 

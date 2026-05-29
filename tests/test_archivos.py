@@ -73,49 +73,63 @@ def pdf_file(filename="test.pdf", size=1024):
 # ---------------------------------------------------------------------------
 
 def _setup_etapa_e02(client, editor_headers, db_session):
-    """Create a proceso, mark E01 COMPLETADO, register E02; return (proceso, etapa_id)."""
-    from sqlalchemy import select
+    """Create a proceso, insert E01a/E01b/E01c COMPLETADO, register E02; return (proceso, etapa_id).
+
+    flujo-real-otin-v2: E01 replaced by E01a/E01b/E01c in the chain.
+    """
     from app.models.etapa import EtapaRegistro
 
     proc = _create_proceso(client, editor_headers)
     pid = proc["id"]
 
-    # Mark E01 rows COMPLETADO (created by proceso via cmn_por_area)
-    e01_rows = db_session.execute(
-        select(EtapaRegistro).where(
-            EtapaRegistro.proceso_id == pid,
-            EtapaRegistro.codigo_etapa == "E01",
+    # flujo-real-otin-v2: insert E01a/E01b/E01c COMPLETADO as prereqs for E02
+    for cod, kw in [("E01a", {}), ("E01b", {}), ("E01c", {"area_usuaria": "AREA_A"})]:
+        row = EtapaRegistro(
+            proceso_id=pid,
+            codigo_etapa=cod,
+            nombre_etapa=f"Test {cod}",
+            area_responsable="TEST",
+            estado_etapa="COMPLETADO",
+            nro_ronda=1,
+            registrado_por="testsetup",
+            **kw,
         )
-    ).scalars().all()
-    for r in e01_rows:
-        r.estado_etapa = "COMPLETADO"
+        db_session.add(row)
     db_session.flush()
 
-    # Register E02 via API (R1 check passes since all E01 have cmn_adjunto=SI)
+    # Register E02 via API (prereq chain E01a→E01b→E01c satisfied)
     etapa_id = _create_etapa(client, pid, "E02", editor_headers)
     return proc, etapa_id
 
 
 def _setup_etapa_e04(client, editor_headers, db_session):
-    """Set up a non-key stage E04 for rejection tests."""
-    from sqlalchemy import select
+    """Set up a non-key stage E04 for rejection tests.
+
+    flujo-real-otin-v2: E01 replaced by E01a/E01b/E01c.
+    """
     from app.models.etapa import EtapaRegistro
 
     proc = _create_proceso(client, editor_headers)
     pid = proc["id"]
 
-    e01_rows = db_session.execute(
-        select(EtapaRegistro).where(
-            EtapaRegistro.proceso_id == pid,
-            EtapaRegistro.codigo_etapa == "E01",
+    # flujo-real-otin-v2: insert E01a/E01b/E01c COMPLETADO
+    for cod, kw in [("E01a", {}), ("E01b", {}), ("E01c", {"area_usuaria": "AREA_A"})]:
+        row = EtapaRegistro(
+            proceso_id=pid,
+            codigo_etapa=cod,
+            nombre_etapa=f"Test {cod}",
+            area_responsable="TEST",
+            estado_etapa="COMPLETADO",
+            nro_ronda=1,
+            registrado_por="testsetup",
+            **kw,
         )
-    ).scalars().all()
-    for r in e01_rows:
-        r.estado_etapa = "COMPLETADO"
+        db_session.add(row)
     db_session.flush()
 
-    # E02, E03 required before E04
+    # E02, E02b, E03 required before E04 (flujo-real-otin-v2 chain)
     _create_etapa(client, pid, "E02", editor_headers)
+    _create_etapa(client, pid, "E02b", editor_headers)
     _create_etapa(client, pid, "E03", editor_headers)
     etapa_id = _create_etapa(client, pid, "E04", editor_headers)
     return proc, etapa_id
@@ -443,8 +457,10 @@ def test_catalog_acepta_adjuntos_count():
     Previously False, now True per Part C requirements.
     """
     from app.services.etapas_catalogo import CODIGOS_CON_ADJUNTOS
+    # flujo-real-otin-v2: E01 removed; E01a/E01b/E01c replace it
     expected = {
-        "E01", "E02", "E03",
+        "E01a", "E01b", "E01c",
+        "E02", "E03",
         "E06", "E06b",
         "E07", "E08", "E09",
         "E11", "E13", "E14", "E15", "E16",

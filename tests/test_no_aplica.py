@@ -213,11 +213,15 @@ def test_no_aplica_satisfies_prereq_for_next(db_session):
     """A stage marked NO_APLICA satisfies the prerequisite for the next stage.
 
     Tests validar_prerequisito_generico directly via registrar_etapa service.
+    flujo-real-otin-v2: E02 prereq chain is E01a→E01b→E01c. Register E02 as NO_APLICA;
+    then E02b (prereq=E02) and E03 (prereq=E02b) should be registerable.
     """
     p = _make_proceso_direct(db_session)
 
-    # E01 COMPLETADO (prereq for E02)
-    _make_etapa_obj(db_session, p.id, "E01", area_usuaria="DTDIS", cmn_adjunto="SI")
+    # flujo-real-otin-v2: E01a/E01b/E01c COMPLETADO (prereq chain for E02)
+    _make_etapa_obj(db_session, p.id, "E01a")
+    _make_etapa_obj(db_session, p.id, "E01b")
+    _make_etapa_obj(db_session, p.id, "E01c", area_usuaria="DTDIS")
 
     # Register E02 as NO_APLICA (skips prereq for E02 itself)
     payload_e02 = EtapaCreate(
@@ -228,7 +232,16 @@ def test_no_aplica_satisfies_prereq_for_next(db_session):
     e02_row = registrar_etapa(db_session, p.id, payload_e02, "testuser")
     assert e02_row.estado_etapa == "NO_APLICA"
 
-    # Now register E03 — E02 is NO_APLICA, prereq should be satisfied
+    # Register E02b as NO_APLICA (prereq=E02 is NO_APLICA → satisfied)
+    payload_e02b = EtapaCreate(
+        codigo_etapa="E02b",
+        nombre_etapa="Consolidado CMN",
+        estado_etapa="NO_APLICA",
+    )
+    e02b_row = registrar_etapa(db_session, p.id, payload_e02b, "testuser")
+    assert e02b_row.estado_etapa == "NO_APLICA"
+
+    # Now register E03 — E02b is NO_APLICA, prereq should be satisfied
     payload_e03 = EtapaCreate(
         codigo_etapa="E03",
         nombre_etapa="Envío indagación",
@@ -243,19 +256,21 @@ def test_no_aplica_satisfies_prereq_for_next(db_session):
 # ---------------------------------------------------------------------------
 
 def test_progreso_no_aplica_excluye_denominador():
-    """Stages marked NO_APLICA reduce the denominator, allowing 100% completion."""
+    """Stages marked NO_APLICA reduce the denominator, allowing 100% completion.
+
+    flujo-real-otin-v2: PROGRESO_DENOMINATOR=26 (was 25).
+    """
     rows = []
 
-    # Complete E01 (non-bucle)
+    # Complete E01a (non-bucle, first in new chain)
     r = EtapaRegistro()
-    r.codigo_etapa = "E01"
+    r.codigo_etapa = "E01a"
     r.estado_etapa = "COMPLETADO"
     r.nro_ronda = 1
     r.es_bucle = False
     rows.append(r)
 
-    # Mark E02-E18 as NO_APLICA (17 non-bucle stages: E02-E04, E07-E18 = many)
-    # For simplicity, mark a subset: E02, E03, E04 as NO_APLICA (3 stages)
+    # Mark E02, E03, E04 as NO_APLICA (3 stages)
     for cod in ["E02", "E03", "E04"]:
         r = EtapaRegistro()
         r.codigo_etapa = cod
@@ -266,26 +281,30 @@ def test_progreso_no_aplica_excluye_denominador():
 
     progreso = calcular_progreso(rows)
 
-    # Denominator = 25 - 3 = 22
-    assert progreso.total == 22
-    # Completed = 1 (E01)
+    # flujo-real-otin-v2: Denominator = 26 - 3 = 23
+    assert progreso.total == 23
+    # Completed = 1 (E01a)
     assert progreso.completadas == 1
-    # porcentaje ≈ 1/22 * 100 ≈ 4.5
-    expected_pct = round(1 / 22 * 100, 1)
+    # porcentaje ≈ 1/23 * 100 ≈ 4.3
+    expected_pct = round(1 / 23 * 100, 1)
     assert progreso.porcentaje == expected_pct
 
 
 def test_progreso_no_aplica_etapa_actual_no_es_no_aplica():
-    """etapa_actual skips NO_APLICA stages — points to the first genuinely pending stage."""
+    """etapa_actual skips NO_APLICA stages — points to the first genuinely pending stage.
+
+    flujo-real-otin-v2: PROGRESO_DENOMINATOR=26. Chain: E01a→E01b→E01c→E02→E02b→E03.
+    """
     rows = []
 
-    # E01 COMPLETADO
-    r = EtapaRegistro()
-    r.codigo_etapa = "E01"
-    r.estado_etapa = "COMPLETADO"
-    r.nro_ronda = 1
-    r.es_bucle = False
-    rows.append(r)
+    # E01a/E01b/E01c COMPLETADO (non-bucle, chain head)
+    for cod in ["E01a", "E01b", "E01c"]:
+        r = EtapaRegistro()
+        r.codigo_etapa = cod
+        r.estado_etapa = "COMPLETADO"
+        r.nro_ronda = 1
+        r.es_bucle = False
+        rows.append(r)
 
     # E02 NO_APLICA
     r = EtapaRegistro()
@@ -297,49 +316,28 @@ def test_progreso_no_aplica_etapa_actual_no_es_no_aplica():
 
     progreso = calcular_progreso(rows)
 
-    # E01 done, E02 is NO_APLICA (skipped), so etapa_actual = E03 (first pending)
-    assert progreso.etapa_actual == "E03"
-    # Denominator = 25 - 1 (E02 NO_APLICA) = 24
-    assert progreso.total == 24
+    # E01a/E01b/E01c done, E02 is NO_APLICA (skipped), so etapa_actual = E02b (first pending)
+    assert progreso.etapa_actual == "E02b"
+    # flujo-real-otin-v2: Denominator = 26 - 1 (E02 NO_APLICA) = 25
+    assert progreso.total == 25
 
 
 def test_progreso_100_con_no_aplica_y_completado():
     """A process can reach 100% when some stages are NO_APLICA.
 
-    There are 23 non-bucle stages. PROGRESO_DENOMINATOR=25 counts E05/E06 as
-    non-bucle (they ARE non-bucle per the design — only E06b/E08a/E08b are extra).
-    Wait — E05/E06 ARE es_bucle=True. Let me recount: PROGRESO_DENOMINATOR=25,
-    ORDEN_ETAPAS=28, es_bucle=5 (E05/E06/E06b/E08a/E08b), non-bucle=23.
-    But denominator=25 means E05/E06 count in denominator. Actually re-reading the
-    design: denominator=25 is the "design says 25", which equals non-bucle (23) +
-    E05 + E06 (they're bucle but historically counted). In practice in the code:
-    calcular_progreso only counts COMPLETADO non-bucle cods → max is 23, not 25.
-    The 25 denominator is the legacy constant kept for compatibility.
+    There are 26 non-bucle stages (PROGRESO_DENOMINATOR=26). Bucles are
+    E05, E06, E06b, E06c, E08a, E08b (es_bucle=True, excluded from denominator).
 
-    For this test: 5 non-bucle NO_APLICA → denominator=25-5=20. All remaining
-    non-bucle (18) COMPLETADO → completadas=18 → 90%, NOT 100%.
-    To reach 100% we need completadas == denominator, i.e., mark enough stages.
-    Mark 5 NO_APLICA (reduces base 25 to 20), then COMPLETADO exactly 20 non-bucle.
-    But there are only 23 non-bucle total, so 23-5=18 available → completadas=18 → 90%.
-    To get 100%: mark ALL non-bucle COMPLETADO (23) and 0 NO_APLICA → 23/25 = 92%.
-    To actually reach 100%: need completadas==denominator, possible when:
+    For this test: 5 non-bucle NO_APLICA → denominator=26-5=21. Remaining
+    non-bucle (21) COMPLETADO → completadas=21 → 100% possible only via
+    CULMINADO override since calcular_progreso counts actual COMPLETADO rows.
       denominator = PROGRESO_DENOMINATOR - no_aplica_count = completadas
-      e.g., 5 NO_APLICA (non-bucle) → denominator=20 → need 20 COMPLETADO.
-      But we only have 23-5=18 remaining non-bucle. Not enough!
-    The only way to reach 100% is if PROGRESO_DENOMINATOR-no_aplica_count <= completadas.
-    With no_aplica=5: 25-5=20, need 20 COMPLETADO from 18 available → impossible.
-    So let's test with a realistic case: PROGRESO_DENOMINATOR - no_aplica_count == completadas.
-    Use no_aplica=7 → denominator=18 → need 18 COMPLETADO from 16 available → still short.
-    The design says denominator=25 which exceeds available non-bucle(23). So 100% is never
-    reached purely through completados unless no_aplica reduces denominator sufficiently.
-    With no_aplica_count=2 → denominator=23 → need 23 COMPLETADO → need all 21 remaining
-    non-bucle → again impossible. Actually non-bucle count=23 total, so:
-    With no_aplica=0 → max porcentaje=23/25*100=92%. With no_aplica=2 → 21/23*100=91.3%.
-    For 100%: need (total_non_bucle - no_aplica) / (25 - no_aplica) = 1 →
-    (23 - na) = (25 - na) → 23=25 → impossible.
+      e.g., 5 NO_APLICA (non-bucle) → denominator=21 → need 21 COMPLETADO.
 
-    Conclusion: the denominator=25 was chosen knowing <100% max for safety. A process
-    reaches 100% ONLY via the CULMINADO override (proceso.estado='CULMINADO' → 100%).
+    The only way to reach 100% is if PROGRESO_DENOMINATOR-no_aplica_count <= completadas.
+    With no_aplica=5: 26-5=21, need 21 COMPLETADO from 21 available → exactly 100%.
+
+    Conclusion: the denominator=26 is set knowing CULMINADO gives the 100% override.
     This test verifies that NO_APLICA correctly reduces the denominator.
     """
     rows = []
@@ -368,24 +366,29 @@ def test_progreso_100_con_no_aplica_y_completado():
 
     progreso = calcular_progreso(rows)
 
-    # Denominator = 25 - 5 = 20 (reduced by NO_APLICA count)
-    assert progreso.total == 20
-    # Completadas = 18 (23 non-bucle total minus 5 NO_APLICA)
-    assert progreso.completadas == 18
-    # Porcentaje = 18/20 * 100 = 90.0
-    assert progreso.porcentaje == 90.0
+    # flujo-real-otin-v2: non-bucle count = 26, 5 NO_APLICA → Denominator = 26 - 5 = 21
+    assert progreso.total == 21
+    # Completadas = non_bucle_total - 5 NO_APLICA
+    non_bucle_total = len(spec_cods_no_bucle)
+    assert progreso.completadas == non_bucle_total - 5
+    # Porcentaje = completadas/21 * 100
+    expected_pct = round((non_bucle_total - 5) / 21 * 100, 1)
+    assert progreso.porcentaje == expected_pct
 
 
 def test_progreso_vacio_sin_no_aplica():
     """No rows → etapa_actual=first stage, total=25, not affected by NO_APLICA logic."""
     progreso = calcular_progreso([])
-    assert progreso.total == PROGRESO_DENOMINATOR  # 25
+    assert progreso.total == PROGRESO_DENOMINATOR  # 26
     assert progreso.etapa_actual == ORDEN_ETAPAS[0]
     assert progreso.porcentaje == 0.0
 
 
 def test_progreso_omitido_no_cuenta_como_no_aplica():
-    """OMITIDO does NOT reduce the denominator (only NO_APLICA does)."""
+    """OMITIDO does NOT reduce the denominator (only NO_APLICA does).
+
+    flujo-real-otin-v2: PROGRESO_DENOMINATOR=26.
+    """
     r = EtapaRegistro()
     r.codigo_etapa = "E02"
     r.estado_etapa = "OMITIDO"
@@ -393,8 +396,8 @@ def test_progreso_omitido_no_cuenta_como_no_aplica():
     r.es_bucle = False
 
     progreso = calcular_progreso([r])
-    # OMITIDO doesn't reduce denominator — still 25
-    assert progreso.total == 25
+    # OMITIDO doesn't reduce denominator — still 26 (flujo-real-otin-v2)
+    assert progreso.total == 26
     # OMITIDO doesn't count as completado
     assert progreso.completadas == 0
 

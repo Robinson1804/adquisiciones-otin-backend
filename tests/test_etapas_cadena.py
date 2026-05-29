@@ -63,14 +63,17 @@ def _insert_etapa(db_session, proceso_id, cod, estado="COMPLETADO", **kw):
 
 
 def _build_chain_up_to(db_session, proceso_id, stop_before):
-    """Insert chain rows directly up to (but not including) stop_before."""
+    """Insert chain rows directly up to (but not including) stop_before.
+
+    flujo-real-otin-v2: E01 replaced by E01a/E01b/E01c in chain.
+    """
     from app.services.etapas_catalogo import CADENA
     for cod in CADENA:
         if cod == stop_before:
             break
         kw = {}
-        if cod == "E01":
-            kw = {"cmn_adjunto": "SI", "area_usuaria": "AREA_A"}
+        if cod == "E01c":
+            kw = {"area_usuaria": "AREA_A"}
         elif cod == "E08":
             kw = {"resultado_eval": "APROBADO"}
         elif cod == "E09":
@@ -89,41 +92,37 @@ def _build_chain_up_to(db_session, proceso_id, stop_before):
 # ---------------------------------------------------------------------------
 
 def test_e03_blocked_without_e02_completado(client, editor_headers, db_session):
-    """SC-02: E03 returns 409 when E02 is not COMPLETADO."""
+    """SC-02: E03 returns 409 when E02b (direct prereq) is not COMPLETADO."""
     proc = _create_proceso(client, editor_headers)
     pid = proc["id"]
 
-    # E01 already created by proceso creation (cmn_por_area). E02 as EN_CURSO.
-    _insert_etapa(db_session, pid, "E02", estado="EN_CURSO")
+    # flujo-real-otin-v2: E03 prereq is E02b (not E02 directly)
+    _insert_etapa(db_session, pid, "E01a")
+    _insert_etapa(db_session, pid, "E01b")
+    _insert_etapa(db_session, pid, "E01c", area_usuaria="AREA_A")
+    _insert_etapa(db_session, pid, "E02")
+    _insert_etapa(db_session, pid, "E02b", estado="EN_CURSO")  # NOT COMPLETADO
 
     resp = _register(client, pid, "E03", editor_headers)
     assert resp.status_code == 409, resp.json()
-    assert "E02" in resp.json()["detail"]
+    assert "E02b" in resp.json()["detail"]
 
 
 # ---------------------------------------------------------------------------
-# SC-01: E03 registers when E02 COMPLETADO
+# SC-01: E03 registers when E02b COMPLETADO
 # ---------------------------------------------------------------------------
 
 def test_e03_registers_with_e02_completado(client, editor_headers, db_session):
-    """SC-01: E03 registers (201) when E01 and E02 are both COMPLETADO."""
+    """SC-01: E03 registers (201) when full prereq chain E01a→E01b→E01c→E02→E02b is COMPLETADO."""
     proc = _create_proceso(client, editor_headers)
     pid = proc["id"]
 
-    # E01 rows were created by proceso creation (cmn_por_area="SI").
-    # Mark E01 COMPLETADO directly then add E02 COMPLETADO.
-    from sqlalchemy import select
-    e01_rows = db_session.execute(
-        select(EtapaRegistro).where(
-            EtapaRegistro.proceso_id == pid,
-            EtapaRegistro.codigo_etapa == "E01",
-        )
-    ).scalars().all()
-    for r in e01_rows:
-        r.estado_etapa = "COMPLETADO"
-    db_session.flush()
-
+    # flujo-real-otin-v2: prereq chain
+    _insert_etapa(db_session, pid, "E01a")
+    _insert_etapa(db_session, pid, "E01b")
+    _insert_etapa(db_session, pid, "E01c", area_usuaria="AREA_A")
     _insert_etapa(db_session, pid, "E02")
+    _insert_etapa(db_session, pid, "E02b")
 
     resp = _register(client, pid, "E03", editor_headers)
     assert resp.status_code == 201, resp.json()
@@ -133,24 +132,20 @@ def test_e03_registers_with_e02_completado(client, editor_headers, db_session):
 # SC-03: E07 registers without E05/E06 (loops are optional)
 # ---------------------------------------------------------------------------
 
+def _insert_new_chain_prereqs(db_session, proceso_id):
+    """Insert E01a/E01b/E01c as COMPLETADO (new chain root for flujo-real-otin-v2)."""
+    _insert_etapa(db_session, proceso_id, "E01a")
+    _insert_etapa(db_session, proceso_id, "E01b")
+    _insert_etapa(db_session, proceso_id, "E01c", area_usuaria="AREA_A")
+
+
 def test_e07_registers_without_e05_e06(client, editor_headers, db_session):
     """SC-03: E07 is registrable with E04 COMPLETADO even without E05/E06."""
     proc = _create_proceso(client, editor_headers)
     pid = proc["id"]
 
-    # Ensure E01 COMPLETADO
-    from sqlalchemy import select
-    e01_rows = db_session.execute(
-        select(EtapaRegistro).where(
-            EtapaRegistro.proceso_id == pid,
-            EtapaRegistro.codigo_etapa == "E01",
-        )
-    ).scalars().all()
-    for r in e01_rows:
-        r.estado_etapa = "COMPLETADO"
-    db_session.flush()
-
-    for cod in ["E02", "E03", "E04"]:
+    _insert_new_chain_prereqs(db_session, pid)
+    for cod in ["E02", "E02b", "E03", "E04"]:
         _insert_etapa(db_session, pid, cod)
 
     # No E05/E06 inserted — E07 should still register
@@ -167,19 +162,9 @@ def test_e05_bucle_blocked_without_e04(client, editor_headers, db_session):
     proc = _create_proceso(client, editor_headers)
     pid = proc["id"]
 
-    # E01 already exists from proceso. E02/E03 inserted but NOT E04.
-    from sqlalchemy import select
-    e01_rows = db_session.execute(
-        select(EtapaRegistro).where(
-            EtapaRegistro.proceso_id == pid,
-            EtapaRegistro.codigo_etapa == "E01",
-        )
-    ).scalars().all()
-    for r in e01_rows:
-        r.estado_etapa = "COMPLETADO"
-    db_session.flush()
-
-    for cod in ["E02", "E03"]:
+    _insert_new_chain_prereqs(db_session, pid)
+    # Insert E02/E02b/E03 but NOT E04
+    for cod in ["E02", "E02b", "E03"]:
         _insert_etapa(db_session, pid, cod)
 
     resp = client.post(
@@ -199,18 +184,8 @@ def test_e09_registers_without_e08a_e08b(client, editor_headers, db_session):
     proc = _create_proceso(client, editor_headers)
     pid = proc["id"]
 
-    from sqlalchemy import select
-    e01_rows = db_session.execute(
-        select(EtapaRegistro).where(
-            EtapaRegistro.proceso_id == pid,
-            EtapaRegistro.codigo_etapa == "E01",
-        )
-    ).scalars().all()
-    for r in e01_rows:
-        r.estado_etapa = "COMPLETADO"
-    db_session.flush()
-
-    for cod in ["E02", "E03", "E04", "E07"]:
+    _insert_new_chain_prereqs(db_session, pid)
+    for cod in ["E02", "E02b", "E03", "E04", "E07"]:
         _insert_etapa(db_session, pid, cod)
     _insert_etapa(db_session, pid, "E08", resultado_eval="APROBADO")
 
@@ -228,19 +203,9 @@ def test_e12_blocked_with_e11_pendiente(client, editor_headers, db_session):
     proc = _create_proceso(client, editor_headers)
     pid = proc["id"]
 
-    from sqlalchemy import select
-    e01_rows = db_session.execute(
-        select(EtapaRegistro).where(
-            EtapaRegistro.proceso_id == pid,
-            EtapaRegistro.codigo_etapa == "E01",
-        )
-    ).scalars().all()
-    for r in e01_rows:
-        r.estado_etapa = "COMPLETADO"
-    db_session.flush()
-
+    _insert_new_chain_prereqs(db_session, pid)
     for cod, kw in [
-        ("E02", {}), ("E03", {}), ("E04", {}), ("E07", {}),
+        ("E02", {}), ("E02b", {}), ("E03", {}), ("E04", {}), ("E07", {}),
         ("E08", {"resultado_eval": "APROBADO"}),
         ("E09", {"monto_cert": "1000.00"}),
         ("E10", {"resultado_eval": "CON_PRESUPUESTO"}),
@@ -264,19 +229,9 @@ def test_e12_registers_with_all_e11_completado(client, editor_headers, db_sessio
     proc = _create_proceso(client, editor_headers)
     pid = proc["id"]
 
-    from sqlalchemy import select
-    e01_rows = db_session.execute(
-        select(EtapaRegistro).where(
-            EtapaRegistro.proceso_id == pid,
-            EtapaRegistro.codigo_etapa == "E01",
-        )
-    ).scalars().all()
-    for r in e01_rows:
-        r.estado_etapa = "COMPLETADO"
-    db_session.flush()
-
+    _insert_new_chain_prereqs(db_session, pid)
     for cod, kw in [
-        ("E02", {}), ("E03", {}), ("E04", {}), ("E07", {}),
+        ("E02", {}), ("E02b", {}), ("E03", {}), ("E04", {}), ("E07", {}),
         ("E08", {"resultado_eval": "APROBADO"}),
         ("E09", {"monto_cert": "1000.00"}),
         ("E10", {"resultado_eval": "CON_PRESUPUESTO"}),
@@ -299,19 +254,9 @@ def test_e14_blocked_without_e13(client, editor_headers, db_session):
     proc = _create_proceso(client, editor_headers)
     pid = proc["id"]
 
-    from sqlalchemy import select
-    e01_rows = db_session.execute(
-        select(EtapaRegistro).where(
-            EtapaRegistro.proceso_id == pid,
-            EtapaRegistro.codigo_etapa == "E01",
-        )
-    ).scalars().all()
-    for r in e01_rows:
-        r.estado_etapa = "COMPLETADO"
-    db_session.flush()
-
+    _insert_new_chain_prereqs(db_session, pid)
     for cod, kw in [
-        ("E02", {}), ("E03", {}), ("E04", {}), ("E07", {}),
+        ("E02", {}), ("E02b", {}), ("E03", {}), ("E04", {}), ("E07", {}),
         ("E08", {"resultado_eval": "APROBADO"}),
         ("E09", {"monto_cert": "1000.00"}),
         ("E10", {"resultado_eval": "CON_PRESUPUESTO"}),
@@ -336,18 +281,8 @@ def test_r7_regression_e09_blocked_without_aprobado(client, editor_headers, db_s
     proc = _create_proceso(client, editor_headers)
     pid = proc["id"]
 
-    from sqlalchemy import select
-    e01_rows = db_session.execute(
-        select(EtapaRegistro).where(
-            EtapaRegistro.proceso_id == pid,
-            EtapaRegistro.codigo_etapa == "E01",
-        )
-    ).scalars().all()
-    for r in e01_rows:
-        r.estado_etapa = "COMPLETADO"
-    db_session.flush()
-
-    for cod in ["E02", "E03", "E04", "E07"]:
+    _insert_new_chain_prereqs(db_session, pid)
+    for cod in ["E02", "E02b", "E03", "E04", "E07"]:
         _insert_etapa(db_session, pid, cod)
 
     # E08 COMPLETADO but resultado_eval = "NO_APROBADO"
@@ -358,27 +293,19 @@ def test_r7_regression_e09_blocked_without_aprobado(client, editor_headers, db_s
 
 
 # ---------------------------------------------------------------------------
-# Regression: R1 still enforces CMN=SI for E02
+# Regression: E02 blocked if E01c PENDIENTE for some area
+# (replaces old R1 cmn_adjunto regression)
 # ---------------------------------------------------------------------------
 
 def test_r1_regression_e02_blocked_without_cmn_si(client, editor_headers, db_session):
-    """R1 regression: E02 returns 409 when E01 has cmn_adjunto != SI."""
-    # Create proceso with CMN=NO to bypass the initial setup
-    from sqlalchemy import select
+    """Regression: E02 returns 409 when E01c is PENDIENTE for at least one area."""
     proc = _create_proceso(client, editor_headers)
     pid = proc["id"]
 
-    # Override E01 CMN to "NO"
-    e01_rows = db_session.execute(
-        select(EtapaRegistro).where(
-            EtapaRegistro.proceso_id == pid,
-            EtapaRegistro.codigo_etapa == "E01",
-        )
-    ).scalars().all()
-    for r in e01_rows:
-        r.estado_etapa = "COMPLETADO"
-        r.cmn_adjunto = "NO"
-    db_session.flush()
+    _insert_etapa(db_session, pid, "E01a")
+    _insert_etapa(db_session, pid, "E01b")
+    # E01c exists but PENDIENTE for AREA_A → blocks E02
+    _insert_etapa(db_session, pid, "E01c", estado="PENDIENTE", area_usuaria="AREA_A")
 
     resp = _register(client, pid, "E02", editor_headers)
     assert resp.status_code == 409, resp.json()

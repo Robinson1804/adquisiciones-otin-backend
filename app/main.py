@@ -12,6 +12,7 @@ from app.routers import procesos as procesos_router
 from app.routers.archivos import router as archivos_router
 from app.routers import dashboard as dashboard_router
 from app.routers import export as export_router
+from app.routers.firma_secuencial import router as firma_secuencial_router
 
 app = FastAPI(title="Adquisiciones TIC API", version="0.1.0")
 
@@ -21,6 +22,7 @@ app.include_router(etapas_router.router, tags=["etapas"])
 app.include_router(archivos_router)
 app.include_router(dashboard_router.router)
 app.include_router(export_router.router)
+app.include_router(firma_secuencial_router)
 
 app.add_middleware(
     CORSMiddleware,

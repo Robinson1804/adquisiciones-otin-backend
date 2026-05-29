@@ -50,25 +50,14 @@ def _insert_etapa(db_session, proceso_id, cod, estado="COMPLETADO", **kwargs):
 
 
 def _insert_chain_prereqs_for_e10(db_session, proceso_id):
-    """Insert chain stages E01(COMPLETADO)→E09 directly so E10 can be registered.
+    """Insert chain stages E01a→E09 directly so E10 can be registered.
 
+    flujo-real-otin-v2: E01 removed; chain starts with E01a/E01b/E01c.
     C3c adds sequential prereqs to the main chain. Tests that register E10 via
-    the API must have E01-E09 COMPLETADO in the DB first.
-    E01 rows are created by proceso creation; we just mark them COMPLETADO.
-    E02-E09 are inserted directly for test setup.
+    the API must have E01a/E01b/E01c/E02/E02b/E03-E09 COMPLETADO in the DB first.
     """
     from sqlalchemy import select
-    # Mark E01 rows COMPLETADO (already created by proceso creation)
-    e01_rows = db_session.execute(
-        select(EtapaRegistro).where(
-            EtapaRegistro.proceso_id == proceso_id,
-            EtapaRegistro.codigo_etapa == "E01",
-        )
-    ).scalars().all()
-    for r in e01_rows:
-        r.estado_etapa = "COMPLETADO"
-    db_session.flush()
-    # Insert E02-E09 chain stages (avoid duplicates — skip if already present)
+    # Insert full chain E01a→E09 (avoid duplicates)
     existing = {
         row.codigo_etapa
         for row in db_session.execute(
@@ -76,7 +65,10 @@ def _insert_chain_prereqs_for_e10(db_session, proceso_id):
         ).scalars().all()
     }
     chain_to_e09 = [
-        ("E02", {}), ("E03", {}), ("E04", {}), ("E07", {}),
+        ("E01a", {}),
+        ("E01b", {}),
+        ("E01c", {"area_usuaria": "DTDIS"}),
+        ("E02", {}), ("E02b", {}), ("E03", {}), ("E04", {}), ("E07", {}),
         ("E08", {"resultado_eval": "APROBADO"}),
         ("E09", {"monto_cert": "1000.00"}),
     ]
@@ -162,23 +154,28 @@ def test_reiniciar_tdr_e02_e09_son_omitidos(client, editor_headers, db_session):
 
 
 def test_reiniciar_tdr_preserva_e01(client, editor_headers, db_session):
-    """After reinicio, E01 rows (CMN) are NOT affected — still as before."""
+    """After reinicio, E01a/E01b/E01c rows are NOT affected — still as before.
+
+    flujo-real-otin-v2: E01 is replaced by E01a/E01b/E01c. The reiniciar-tdr
+    endpoint only OMITs E02-E09 rows, leaving E01a/E01b/E01c intact.
+    """
     proc = _create_proceso(client, editor_headers)
     _cancel_proceso_via_e10(client, editor_headers, proc["id"], db_session=db_session)
 
     client.post(f"/procesos/{proc['id']}/reiniciar-tdr", headers=editor_headers)
 
     db_session.expire_all()
-    e01_rows = db_session.execute(
-        select(EtapaRegistro).where(
-            EtapaRegistro.proceso_id == proc["id"],
-            EtapaRegistro.codigo_etapa == "E01",
-        )
-    ).scalars().all()
-    assert len(e01_rows) > 0
-    # E01 rows should NOT be OMITIDO (their estado is unchanged)
-    for row in e01_rows:
-        assert row.estado_etapa != "OMITIDO"
+    # flujo-real-otin-v2: check E01a/E01b/E01c are preserved (not OMITIDO)
+    for cod in ["E01a", "E01b", "E01c"]:
+        rows = db_session.execute(
+            select(EtapaRegistro).where(
+                EtapaRegistro.proceso_id == proc["id"],
+                EtapaRegistro.codigo_etapa == cod,
+            )
+        ).scalars().all()
+        assert len(rows) > 0, f"{cod} rows missing after reinicio"
+        for row in rows:
+            assert row.estado_etapa != "OMITIDO", f"{cod} should NOT be OMITIDO after reinicio"
 
 
 def test_reiniciar_tdr_proceso_estado_en_proceso(client, editor_headers, db_session):
@@ -222,10 +219,12 @@ def test_reiniciar_tdr_progreso_recalcula(client, editor_headers, db_session):
 
     etapas_data = _get_etapas(client, editor_headers, proc["id"])
     progreso = etapas_data["progreso"]
-    # E01 may or may not be COMPLETADO depending on setup; E02 should be etapa_actual
-    # (since new E02 is PENDIENTE and OMITIDO E02s don't count as COMPLETADO)
+    # flujo-real-otin-v2: E01a/E01b/E01c are COMPLETADO; new E02 is PENDIENTE
+    # etapa_actual should be E02 (first pending in chain after E01a/E01b/E01c)
     etapa_actual = progreso["etapa_actual"]
-    assert etapa_actual in ("E01", "E02")  # E01 from _create_proceso is PENDIENTE too
+    assert etapa_actual == "E02", (
+        f"Expected E02 as etapa_actual after reinicio, got '{etapa_actual}'"
+    )
 
 
 # ---------------------------------------------------------------------------

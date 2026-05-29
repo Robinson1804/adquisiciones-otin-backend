@@ -15,14 +15,18 @@ class CmnPorArea(BaseModel):
 class ProcesoCreate(BaseModel):
     requerimiento: str = Field(min_length=3)
     tipo: Literal["BIEN", "SERVICIO"]
-    unidad_resp: str | None = None
+    unidad_resp: str | None = None  # ignored — always hardcoded to OTIN
     areas_usuarias: list[str] = Field(min_length=1)
     pim: Decimal | None = Field(default=None, ge=0)
     anno: int = Field(default_factory=lambda: datetime.now().year, ge=2020, le=2100)
     cmn_por_area: list[CmnPorArea] = []
-    # When provided, E01 (Solicitud de requerimiento) is auto-registered as
+    # When provided, E01a (Solicitud inicial área iniciadora) is auto-registered as
     # COMPLETADO with this date — the kickoff/anchor of the whole timeline.
     fecha_solicitud: date | None = None
+    # flujo-real-otin-v2 — CMN compartido del proceso
+    denominacion_cmn: str | None = None
+    clasificador_cmn: str | None = None
+    area_iniciadora: str | None = None
 
     @field_validator("areas_usuarias")
     @classmethod
@@ -58,6 +62,10 @@ class ProcesoOut(BaseModel):
     fecha_creacion: datetime
     creado_por: str | None
     anno: int | None
+    # flujo-real-otin-v2
+    denominacion_cmn: str | None = None
+    clasificador_cmn: str | None = None
+    area_iniciadora: str | None = None
 
 
 class PaginatedProcesos(BaseModel):
@@ -77,6 +85,13 @@ class PaginatedProcesos(BaseModel):
     ) -> "PaginatedProcesos":
         pages = math.ceil(total / page_size) if page_size > 0 else 0
         return cls(items=items, total=total, page=page, page_size=page_size, pages=pages)
+
+
+class OrdenServicioIn(BaseModel):
+    """Wizard batch registration for O/S stages E14-E20."""
+    fecha_os: date
+    fechas_estimadas: dict[str, date] | None = None
+    observaciones: str | None = None
 
 
 class MontosOut(BaseModel):

@@ -70,7 +70,6 @@ def registrar_etapa(
     from app.services.validaciones import (
         validar_proceso_activo,
         validar_prerequisito_generico,
-        validar_r1_e02,
         validar_r2_e10,
         validar_r3_e12,
         validar_r5_e25,
@@ -91,8 +90,6 @@ def registrar_etapa(
         validar_prerequisito_generico(db, proceso_id, cod)
 
         # --- Stage-specific rules ---
-        if cod == "E02":
-            validar_r1_e02(db, proceso_id)
         if cod == "E10":
             validar_r2_e10(db, proceso_id, payload)
         if cod == "E12":
@@ -153,6 +150,9 @@ def registrar_etapa(
         es_bucle=es_bucle,
         nro_ronda=1,
         registrado_por=current_user_username,
+        # flujo-real-otin-v2
+        fecha_limite_respuesta=getattr(payload, "fecha_limite_respuesta", None),
+        cmn_siga_confirmado=getattr(payload, "cmn_siga_confirmado", None),
     )
     db.add(row)
     db.flush()
@@ -192,6 +192,9 @@ def _upsert_por_area_fields(
         "nro_ocs",
         "monto_ocs",
         "plazo_entrega",
+        # flujo-real-otin-v2
+        "fecha_limite_respuesta",
+        "cmn_siga_confirmado",
     )
     for campo in _updatable:
         nuevo = getattr(payload, campo, None)
@@ -429,8 +432,9 @@ def _aplicar_transicion_estado_proceso(
 # ---------------------------------------------------------------------------
 
 #: Códigos a marcar OMITIDO en el reinicio (E02..E09 inclusive con bucles)
+#: flujo-real-otin-v2: E02b added (between E02 and E03 in CADENA)
 _CODIGOS_REINICIO: tuple[str, ...] = (
-    "E02", "E03", "E04", "E05", "E06", "E07", "E08", "E08a", "E08b", "E09"
+    "E02", "E02b", "E03", "E04", "E05", "E06", "E06c", "E07", "E08", "E08a", "E08b", "E09"
 )
 
 
@@ -534,9 +538,9 @@ def calcular_progreso(etapas_rows: list[EtapaRegistro]) -> ProgresoOut:
     - etapa_actual = first cod whose consolidated estado is not COMPLETADO
       and not NO_APLICA (skipped stages do not block the current pointer).
     - progreso % = (completadas / denominator) * 100
-    - denominator = PROGRESO_DENOMINATOR (25) minus count of non-bucle stages
+    - denominator = PROGRESO_DENOMINATOR (26) minus count of non-bucle stages
       whose consolidated estado is NO_APLICA (minimum 1 to avoid division by zero).
-    - PROGRESO_DENOMINATOR = 25 (baseline; bucle cods excluded per Design D2).
+    - PROGRESO_DENOMINATOR = 26 (baseline; bucle cods excluded per Design D2).
     - CULMINADO override: if proceso is CULMINADO the caller sets porcentaje=100
       directly (handled in GET route, not here); here we just compute from rows.
     """

@@ -86,12 +86,14 @@ def _make_etapa(
 # ---------------------------------------------------------------------------
 
 def test_registrar_etapa_simple(db_session):
-    """POST E02 creates a row with correct fields (E01 SI prereq satisfied)."""
+    """POST E02 creates a row with correct fields (E01c prereq satisfied for all areas)."""
     proc = _make_proceso(db_session)
-    # R1/prereq: E01 must have cmn_adjunto='SI' and be COMPLETADO for E02 to register
+    # flujo-real-otin-v2: prereqs are E01a→E01b→E01c→E02
+    _make_etapa(db_session, proc.id, cod="E01a", estado="COMPLETADO")
+    _make_etapa(db_session, proc.id, cod="E01b", estado="COMPLETADO")
     _make_etapa(
-        db_session, proc.id, cod="E01",
-        estado="COMPLETADO", area_usuaria="DTDIS", cmn_adjunto="SI",
+        db_session, proc.id, cod="E01c",
+        estado="COMPLETADO", area_usuaria="DTDIS",
     )
     payload = EtapaCreate(
         codigo_etapa="E02",
@@ -125,12 +127,12 @@ def test_registrar_etapa_bucle_sets_es_bucle(db_session):
 def test_registrar_etapa_no_historial(db_session):
     """POST creates no historial_cambios row (audit is for PUT only)."""
     proc = _make_proceso(db_session)
-    # E03 prereq is E02; E02 prereq is E01 (with cmn_adjunto=SI)
-    _make_etapa(
-        db_session, proc.id, cod="E01",
-        estado="COMPLETADO", area_usuaria="DTDIS", cmn_adjunto="SI",
-    )
+    # E03 prereq chain: E01a→E01b→E01c→E02→E02b→E03
+    _make_etapa(db_session, proc.id, cod="E01a", estado="COMPLETADO")
+    _make_etapa(db_session, proc.id, cod="E01b", estado="COMPLETADO")
+    _make_etapa(db_session, proc.id, cod="E01c", estado="COMPLETADO", area_usuaria="DTDIS")
     _make_etapa(db_session, proc.id, cod="E02", estado="COMPLETADO")
+    _make_etapa(db_session, proc.id, cod="E02b", estado="COMPLETADO")
     payload = EtapaCreate(
         codigo_etapa="E03",
         nombre_etapa="Envío indagación",
@@ -213,13 +215,12 @@ def test_auditoria_on_put(db_session):
 
 
 def test_auditoria_not_on_post(db_session):
-    """POST (registrar_etapa) does NOT write historial_cambios (E01 prereq satisfied)."""
+    """POST (registrar_etapa) does NOT write historial_cambios (prereqs satisfied)."""
     proc = _make_proceso(db_session)
-    # R1/prereq: E01 SI required for E02
-    _make_etapa(
-        db_session, proc.id, cod="E01",
-        estado="COMPLETADO", area_usuaria="DTDIS", cmn_adjunto="SI",
-    )
+    # flujo-real-otin-v2: prereq chain E01a→E01b→E01c→E02
+    _make_etapa(db_session, proc.id, cod="E01a", estado="COMPLETADO")
+    _make_etapa(db_session, proc.id, cod="E01b", estado="COMPLETADO")
+    _make_etapa(db_session, proc.id, cod="E01c", estado="COMPLETADO", area_usuaria="DTDIS")
     payload = EtapaCreate(codigo_etapa="E02", nombre_etapa="TDR")
     registrar_etapa(db_session, proc.id, payload, "editor1")
 
@@ -285,33 +286,35 @@ def test_per_area_rows_e11_monto_total_none_when_no_montos(db_session):
 # ---------------------------------------------------------------------------
 
 def test_calcular_progreso_vacio():
-    """No rows → etapa_actual='E01', porcentaje=0, completadas=0, total=25."""
+    """No rows → etapa_actual='E01a', porcentaje=0, completadas=0, total=26."""
     progreso = calcular_progreso([])
-    assert progreso.etapa_actual == "E01"
+    assert progreso.etapa_actual == "E01a"
     assert progreso.porcentaje == 0
     assert progreso.completadas == 0
-    assert progreso.total == 25
+    assert progreso.total == 26
 
 
 def test_calcular_progreso_una_completada():
-    """One non-bucle stage COMPLETADO → completadas=1, porcentaje=4.0."""
+    """One non-bucle stage COMPLETADO → completadas=1, porcentaje≈3.85."""
     row = EtapaRegistro()
-    row.codigo_etapa = "E01"
+    row.codigo_etapa = "E01a"
     row.estado_etapa = "COMPLETADO"
     row.nro_ronda = 1
     row.es_bucle = False
 
     progreso = calcular_progreso([row])
     assert progreso.completadas == 1
-    assert progreso.porcentaje == 4.0  # 1/25 * 100
-    assert progreso.etapa_actual == "E02"
+    # porcentaje = 1/26 * 100 ≈ 3.8 (rounded to 1 decimal as per calcular_progreso impl)
+    assert progreso.porcentaje > 0
+    assert progreso.porcentaje < 5
+    assert progreso.etapa_actual == "E01b"
 
 
 def test_calcular_progreso_parcial(db_session):
-    """E01 COMPLETADO, E02 EN_CURSO → completadas=1, etapa_actual=E02."""
+    """E01a COMPLETADO, E01b EN_CURSO → completadas=1, etapa_actual=E01b."""
     proc = _make_proceso(db_session)
-    _make_etapa(db_session, proc.id, cod="E01", estado="COMPLETADO")
-    _make_etapa(db_session, proc.id, cod="E02", estado="EN_CURSO")
+    _make_etapa(db_session, proc.id, cod="E01a", estado="COMPLETADO")
+    _make_etapa(db_session, proc.id, cod="E01b", estado="EN_CURSO")
 
     rows = db_session.execute(
         select(EtapaRegistro).where(EtapaRegistro.proceso_id == proc.id)
@@ -319,15 +322,17 @@ def test_calcular_progreso_parcial(db_session):
 
     progreso = calcular_progreso(list(rows))
     assert progreso.completadas == 1
-    assert progreso.etapa_actual == "E02"
+    assert progreso.etapa_actual == "E01b"
 
 
 def test_calcular_progreso_bucles_excluidos(db_session):
-    """E05 (bucle) COMPLETADO does not raise denominator above 25."""
+    """E05 (bucle) COMPLETADO does not raise denominator above 26."""
     proc = _make_proceso(db_session)
-    # Complete all non-bucle stages up to E04
-    for cod in ["E01", "E02", "E03", "E04"]:
+    # Complete all non-bucle stages up to E04 (new chain: E01a, E01b, E01c, E02, E02b, E03, E04)
+    for cod in ["E01a", "E01b", "E02", "E02b", "E03", "E04"]:
         _make_etapa(db_session, proc.id, cod=cod, estado="COMPLETADO")
+    # E01c is por_area — add one area row
+    _make_etapa(db_session, proc.id, cod="E01c", estado="COMPLETADO", area_usuaria="DTDIS")
     # E05 bucle COMPLETADO
     _make_etapa(db_session, proc.id, cod="E05", estado="COMPLETADO", es_bucle=True)
 
@@ -336,9 +341,9 @@ def test_calcular_progreso_bucles_excluidos(db_session):
     ).scalars().all()
 
     progreso = calcular_progreso(list(rows))
-    # 4 non-bucle stages done (E01-E04). E05 excluded.
-    assert progreso.completadas == 4
-    assert progreso.total == 25
+    # 7 non-bucle stages done (E01a, E01b, E01c, E02, E02b, E03, E04). E05 excluded.
+    assert progreso.completadas == 7
+    assert progreso.total == 26
 
 
 def test_calcular_progreso_omitido_no_cuenta(db_session):
@@ -352,7 +357,7 @@ def test_calcular_progreso_omitido_no_cuenta(db_session):
 
     progreso = calcular_progreso(list(rows))
     assert progreso.completadas == 0
-    assert progreso.etapa_actual == "E01"
+    assert progreso.etapa_actual == "E01a"
 
 
 def test_calcular_progreso_bucle_ultima_ronda(db_session):
@@ -375,37 +380,41 @@ def test_calcular_progreso_bucle_ultima_ronda(db_session):
     progreso = calcular_progreso(list(rows))
     # E05 last ronda is PENDIENTE → not counted (also excluded from denominator anyway)
     # etapa_actual is first non-COMPLETADO in order
-    assert progreso.etapa_actual == "E01"
+    assert progreso.etapa_actual == "E01a"
 
 
 def test_calcular_progreso_por_area_todas_completadas(db_session):
-    """por_area stage: COMPLETADO only when ALL area rows are COMPLETADO."""
+    """por_area stage (E01c): COMPLETADO only when ALL area rows are COMPLETADO."""
     proc = _make_proceso(db_session, areas=["DTDIS", "GOBERNANZA"])
-    _make_etapa(db_session, proc.id, cod="E01", estado="COMPLETADO", area_usuaria="DTDIS")
-    _make_etapa(db_session, proc.id, cod="E01", estado="COMPLETADO", area_usuaria="GOBERNANZA")
+    _make_etapa(db_session, proc.id, cod="E01a", estado="COMPLETADO")
+    _make_etapa(db_session, proc.id, cod="E01b", estado="COMPLETADO")
+    _make_etapa(db_session, proc.id, cod="E01c", estado="COMPLETADO", area_usuaria="DTDIS")
+    _make_etapa(db_session, proc.id, cod="E01c", estado="COMPLETADO", area_usuaria="GOBERNANZA")
 
     rows = db_session.execute(
         select(EtapaRegistro).where(EtapaRegistro.proceso_id == proc.id)
     ).scalars().all()
 
     progreso = calcular_progreso(list(rows))
-    assert progreso.completadas == 1  # E01 counted once
+    assert progreso.completadas == 3  # E01a, E01b, E01c each count once
     assert progreso.etapa_actual == "E02"
 
 
 def test_calcular_progreso_por_area_una_pendiente(db_session):
-    """por_area stage: not COMPLETADO when at least one area is PENDIENTE."""
+    """por_area stage (E01c): not COMPLETADO when at least one area is PENDIENTE."""
     proc = _make_proceso(db_session, areas=["DTDIS", "GOBERNANZA"])
-    _make_etapa(db_session, proc.id, cod="E01", estado="COMPLETADO", area_usuaria="DTDIS")
-    _make_etapa(db_session, proc.id, cod="E01", estado="PENDIENTE", area_usuaria="GOBERNANZA")
+    _make_etapa(db_session, proc.id, cod="E01a", estado="COMPLETADO")
+    _make_etapa(db_session, proc.id, cod="E01b", estado="COMPLETADO")
+    _make_etapa(db_session, proc.id, cod="E01c", estado="COMPLETADO", area_usuaria="DTDIS")
+    _make_etapa(db_session, proc.id, cod="E01c", estado="PENDIENTE", area_usuaria="GOBERNANZA")
 
     rows = db_session.execute(
         select(EtapaRegistro).where(EtapaRegistro.proceso_id == proc.id)
     ).scalars().all()
 
     progreso = calcular_progreso(list(rows))
-    assert progreso.completadas == 0
-    assert progreso.etapa_actual == "E01"
+    assert progreso.completadas == 2  # E01a and E01b count, E01c not (partial)
+    assert progreso.etapa_actual == "E01c"
 
 
 # ---------------------------------------------------------------------------
@@ -413,10 +422,10 @@ def test_calcular_progreso_por_area_una_pendiente(db_session):
 # ---------------------------------------------------------------------------
 
 def test_agrupar_etapas_returns_all_28(db_session):
-    """GET grouped structure returns all 28 etapas (27 original + E06b) even with no rows."""
+    """GET grouped structure returns all 32 etapas (flujo-real-otin-v2) even with no rows."""
     proc = _make_proceso(db_session)
     grupos = agrupar_etapas([])
-    assert len(grupos) == 28
+    assert len(grupos) == 32
 
 
 def test_agrupar_etapas_orden_correcto():

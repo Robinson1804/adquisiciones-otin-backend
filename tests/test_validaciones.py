@@ -83,7 +83,7 @@ def _setup_chain_prereqs(db_session, proceso_id, stop_before_cod):
 
     C3c added sequential prereqs to the main chain. Tests that register a
     mid-chain stage via the API need all prior stages present in DB.
-    E01 is already created by _create_proceso; we mark it COMPLETADO.
+    flujo-real-otin-v2: E01 replaced by E01a/E01b/E01c in chain.
     """
     from app.services.etapas_catalogo import CADENA
     existing = {
@@ -95,13 +95,12 @@ def _setup_chain_prereqs(db_session, proceso_id, stop_before_cod):
     for cod in CADENA:
         if cod == stop_before_cod:
             break
-        if cod == "E01":
-            _set_e01_completado(db_session, proceso_id)
-            continue
         if cod in existing:
             continue
         kw = {}
-        if cod == "E08":
+        if cod == "E01c":
+            kw = {"area_usuaria": "DTDIS"}
+        elif cod == "E08":
             kw = {"resultado_eval": "APROBADO"}
         elif cod == "E09":
             kw = {"monto_cert": "1000.00"}
@@ -118,35 +117,40 @@ def _setup_chain_prereqs(db_session, proceso_id, stop_before_cod):
 
 
 # ---------------------------------------------------------------------------
-# R1 — E02 bloqueada sin CMN
+# R1 — E02 bloqueada sin E01a/E01b/E01c completadas (flujo-real-otin-v2)
 # ---------------------------------------------------------------------------
 
 def test_r1_e02_blocked_cmn_pendiente(client, editor_headers, db_session):
-    """R1 BLOCKED: POST E02 when E01 area has cmn_adjunto='PENDIENTE' → 409."""
-    proc = _create_proceso(client, editor_headers)
-    # E01 row exists with cmn_adjunto=PENDIENTE (default state from _create_proceso)
-    e01_rows = db_session.execute(
-        select(EtapaRegistro).where(
-            EtapaRegistro.proceso_id == proc["id"],
-            EtapaRegistro.codigo_etapa == "E01",
-        )
-    ).scalars().all()
-    for row in e01_rows:
-        row.cmn_adjunto = "PENDIENTE"
-        row.estado_etapa = "COMPLETADO"  # prereq passes but R1 still blocks
-    db_session.flush()
+    """R1 BLOCKED: POST E02 when E01c is not COMPLETADO for area → 409.
 
-    resp = _post_etapa(client, editor_headers, proc["id"], "E02")
+    flujo-real-otin-v2: R1 is now enforced by generic prereq check on E01c.
+    E01 rows no longer exist; E01c replaces them per area.
+    """
+    proc = _create_proceso(client, editor_headers)
+    pid = proc["id"]
+    # Insert E01a/E01b COMPLETADO but E01c PENDIENTE → prereq E01c not satisfied
+    _insert_etapa(db_session, pid, "E01a")
+    _insert_etapa(db_session, pid, "E01b")
+    _insert_etapa(db_session, pid, "E01c", estado="PENDIENTE", area_usuaria="DTDIS")
+
+    resp = _post_etapa(client, editor_headers, pid, "E02")
     assert resp.status_code == 409, resp.text
-    assert "CMN" in resp.json()["detail"]
+    assert "E01c" in resp.json()["detail"]
 
 
 def test_r1_e02_happy_all_cmn_si(client, editor_headers, db_session):
-    """R1 HAPPY: POST E02 when all E01 areas have cmn_adjunto='SI' → 201."""
-    proc = _create_proceso(client, editor_headers)
-    _set_e01_completado(db_session, proc["id"])
+    """R1 HAPPY: POST E02 when E01a/E01b/E01c all COMPLETADO → 201.
 
-    resp = _post_etapa(client, editor_headers, proc["id"], "E02")
+    flujo-real-otin-v2: E01c COMPLETADO (with cmn_siga_confirmado) satisfies prereq.
+    Also need E02b before E03, but here we only test E02 registration.
+    """
+    proc = _create_proceso(client, editor_headers)
+    pid = proc["id"]
+    _insert_etapa(db_session, pid, "E01a")
+    _insert_etapa(db_session, pid, "E01b")
+    _insert_etapa(db_session, pid, "E01c", area_usuaria="DTDIS")
+
+    resp = _post_etapa(client, editor_headers, pid, "E02")
     assert resp.status_code == 201, resp.text
     assert resp.json()["codigo_etapa"] == "E02"
 
@@ -459,3 +463,49 @@ def test_prereq_generico_e09_sin_e08_completado(client, editor_headers, db_sessi
     )
     # prereq check fires before R7 check (E08 not COMPLETADO → prereq blocked)
     assert resp.status_code == 409, resp.text
+
+
+# ---------------------------------------------------------------------------
+# T06a — E02 blocked until all E01c COMPLETADO or NO_APLICA
+# (flujo-real-otin-v2: replaces old R1 cmn_adjunto gate)
+# ---------------------------------------------------------------------------
+
+def test_e02_blocked_si_e01c_pendiente_alguna_area(client, editor_headers, db_session):
+    """T06a BLOCKED: E02 returns 409 when E01c is PENDIENTE for any area_usuaria."""
+    proc = _create_proceso(client, editor_headers, areas=["DCOP", "DREH"])
+    # Insert prereqs: E01a COMPLETADO, E01b COMPLETADO
+    _insert_etapa(db_session, proc["id"], "E01a", estado="COMPLETADO")
+    _insert_etapa(db_session, proc["id"], "E01b", estado="COMPLETADO")
+    # E01c DCOP = COMPLETADO, E01c DREH = PENDIENTE (blocks E02)
+    _insert_etapa(db_session, proc["id"], "E01c", estado="COMPLETADO", area_usuaria="DCOP")
+    _insert_etapa(db_session, proc["id"], "E01c", estado="PENDIENTE", area_usuaria="DREH")
+    db_session.flush()
+
+    resp = _post_etapa(client, editor_headers, proc["id"], "E02")
+    assert resp.status_code == 409, resp.text
+
+
+def test_e02_pasa_si_e01c_completado_todas_areas(client, editor_headers, db_session):
+    """T06a HAPPY: E02 passes when all E01c rows are COMPLETADO."""
+    proc = _create_proceso(client, editor_headers, areas=["DCOP", "DREH"])
+    _insert_etapa(db_session, proc["id"], "E01a", estado="COMPLETADO")
+    _insert_etapa(db_session, proc["id"], "E01b", estado="COMPLETADO")
+    _insert_etapa(db_session, proc["id"], "E01c", estado="COMPLETADO", area_usuaria="DCOP")
+    _insert_etapa(db_session, proc["id"], "E01c", estado="COMPLETADO", area_usuaria="DREH")
+    db_session.flush()
+
+    resp = _post_etapa(client, editor_headers, proc["id"], "E02")
+    assert resp.status_code == 201, resp.text
+
+
+def test_e02_pasa_si_e01c_no_aplica_una_area(client, editor_headers, db_session):
+    """T06a HAPPY: E02 passes when E01c is COMPLETADO for one area and NO_APLICA for another."""
+    proc = _create_proceso(client, editor_headers, areas=["DCOP", "DREH"])
+    _insert_etapa(db_session, proc["id"], "E01a", estado="COMPLETADO")
+    _insert_etapa(db_session, proc["id"], "E01b", estado="COMPLETADO")
+    _insert_etapa(db_session, proc["id"], "E01c", estado="COMPLETADO", area_usuaria="DCOP")
+    _insert_etapa(db_session, proc["id"], "E01c", estado="NO_APLICA", area_usuaria="DREH")
+    db_session.flush()
+
+    resp = _post_etapa(client, editor_headers, proc["id"], "E02")
+    assert resp.status_code == 201, resp.text

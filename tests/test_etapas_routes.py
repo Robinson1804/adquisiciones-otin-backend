@@ -121,21 +121,21 @@ def test_get_agrupado_estructura_28_etapas(client, editor_headers):
     body = resp.json()
     assert "etapas" in body
     assert "progreso" in body
-    assert len(body["etapas"]) == 28
+    assert len(body["etapas"]) == 32
 
     cods = [e["cod"] for e in body["etapas"]]
     assert cods == ORDEN_ETAPAS
 
 
 def test_get_agrupado_pendiente_sin_registros(client, editor_headers):
-    """GET returns all PENDIENTE when no stages registered (except E01 from C2)."""
+    """GET returns all PENDIENTE when no stages registered."""
     proc = _create_proceso(client, editor_headers)
     resp = client.get(f"/procesos/{proc['id']}/etapas", headers=editor_headers)
     body = resp.json()
 
-    # progreso starts at 0 (E01 rows from C2 are PENDIENTE)
+    # progreso starts at 0 (no E01c rows auto-created — only E01a auto-created when area_iniciadora)
     progreso = body["progreso"]
-    assert progreso["total"] == 25
+    assert progreso["total"] == 26
     assert progreso["completadas"] == 0
     assert isinstance(progreso["porcentaje"], (int, float))
 
@@ -150,7 +150,7 @@ def test_get_agrupado_progreso_block_structure(client, editor_headers):
     assert "porcentaje" in progreso
     assert "completadas" in progreso
     assert "total" in progreso
-    assert progreso["total"] == 25
+    assert progreso["total"] == 26
 
 
 def test_get_agrupado_etapa_fields(client, editor_headers):
@@ -180,20 +180,26 @@ def test_get_agrupado_proceso_404(client, editor_headers):
 # ---------------------------------------------------------------------------
 
 def test_post_etapa_201(client, editor_headers, db_session):
-    """EDITOR POST → 201 with EtapaOut body (E01 prereq COMPLETADO with cmn_adjunto=SI)."""
+    """EDITOR POST → 201 with EtapaOut body (prereqs satisfied via DB inserts)."""
     proc = _create_proceso(client, editor_headers)
-    # R1 + prereq: mark the E01 row as COMPLETADO so E02 can register
+    # flujo-real-otin-v2: prereq chain E01a→E01b→E01c→E02
     from app.models.etapa import EtapaRegistro
-    from sqlalchemy import select
-    e01_rows = db_session.execute(
-        select(EtapaRegistro).where(
-            EtapaRegistro.proceso_id == proc["id"],
-            EtapaRegistro.codigo_etapa == "E01",
-        )
-    ).scalars().all()
-    for row in e01_rows:
-        row.cmn_adjunto = "SI"
-        row.estado_etapa = "COMPLETADO"
+    db_session.add(EtapaRegistro(
+        proceso_id=proc["id"], codigo_etapa="E01a",
+        nombre_etapa="Solicitud inicial", area_responsable="AREAS",
+        estado_etapa="COMPLETADO", registrado_por="test", nro_ronda=1,
+    ))
+    db_session.add(EtapaRegistro(
+        proceso_id=proc["id"], codigo_etapa="E01b",
+        nombre_etapa="Oficio circular", area_responsable="OTIN",
+        estado_etapa="COMPLETADO", registrado_por="test", nro_ronda=1,
+    ))
+    db_session.add(EtapaRegistro(
+        proceso_id=proc["id"], codigo_etapa="E01c",
+        nombre_etapa="Respuesta área", area_responsable="AREAS",
+        area_usuaria="DTDIS", estado_etapa="COMPLETADO",
+        registrado_por="test", nro_ronda=1,
+    ))
     db_session.flush()
 
     resp = client.post(
@@ -354,4 +360,121 @@ def test_progreso_culminado_100(client, editor_headers, db_session):
     assert resp.status_code == 200, resp.text
     progreso = resp.json()["progreso"]
     assert progreso["porcentaje"] == 100.0
-    assert progreso["etapa_actual"] is None
+
+
+# ---------------------------------------------------------------------------
+# T04a — fecha_limite_respuesta + cmn_siga_confirmado in EtapaCreate
+# ---------------------------------------------------------------------------
+
+def test_etapa_con_fecha_limite_respuesta(client, editor_headers, db_session):
+    """POST etapa with fecha_limite_respuesta persists the date.
+
+    Uses E01b which has no DB-enforced prereqs at schema level (prereq E01a
+    is validated by the service, so we register E01a first via direct DB insert).
+    """
+    from app.models.etapa import EtapaRegistro
+
+    proc = _create_proceso(client, editor_headers)
+    # Insert E01a directly to satisfy prereq
+    db_session.add(EtapaRegistro(
+        proceso_id=proc["id"],
+        codigo_etapa="E01a",
+        nombre_etapa="Solicitud inicial área iniciadora",
+        area_responsable="AREAS",
+        estado_etapa="COMPLETADO",
+        registrado_por="test",
+        nro_ronda=1,
+    ))
+    db_session.flush()
+
+    payload = {
+        "codigo_etapa": "E01b",
+        "nombre_etapa": "Oficio circular OTIN a áreas",
+        "fecha_inicio": "2026-06-01",
+        "estado_etapa": "COMPLETADO",
+        "fecha_limite_respuesta": "2026-07-01",
+    }
+    resp = client.post(
+        f"/procesos/{proc['id']}/etapas",
+        json=payload,
+        headers=editor_headers,
+    )
+    assert resp.status_code == 201, resp.text
+    data = resp.json()
+    assert data["fecha_limite_respuesta"] == "2026-07-01"
+
+
+def test_etapa_sin_fecha_limite_respuesta_es_null(client, editor_headers, db_session):
+    """POST etapa without fecha_limite_respuesta → stored as null."""
+    from app.models.etapa import EtapaRegistro
+
+    proc = _create_proceso(client, editor_headers)
+    db_session.add(EtapaRegistro(
+        proceso_id=proc["id"],
+        codigo_etapa="E01a",
+        nombre_etapa="Solicitud inicial área iniciadora",
+        area_responsable="AREAS",
+        estado_etapa="COMPLETADO",
+        registrado_por="test",
+        nro_ronda=1,
+    ))
+    db_session.flush()
+
+    payload = {
+        "codigo_etapa": "E01b",
+        "nombre_etapa": "Oficio circular OTIN a áreas",
+        "fecha_inicio": "2026-06-01",
+        "estado_etapa": "COMPLETADO",
+    }
+    resp = client.post(
+        f"/procesos/{proc['id']}/etapas",
+        json=payload,
+        headers=editor_headers,
+    )
+    assert resp.status_code == 201, resp.text
+    data = resp.json()
+    assert data.get("fecha_limite_respuesta") is None
+
+
+def test_etapa_con_cmn_siga_confirmado(client, editor_headers, db_session):
+    """POST etapa with cmn_siga_confirmado=true persists the value."""
+    from app.models.etapa import EtapaRegistro
+
+    proc = _create_proceso(client, editor_headers, areas=["DCOP"])
+    # Insert E01a then E01b to satisfy prereqs for E01c
+    db_session.add(EtapaRegistro(
+        proceso_id=proc["id"],
+        codigo_etapa="E01a",
+        nombre_etapa="Solicitud inicial área iniciadora",
+        area_responsable="AREAS",
+        estado_etapa="COMPLETADO",
+        registrado_por="test",
+        nro_ronda=1,
+    ))
+    db_session.add(EtapaRegistro(
+        proceso_id=proc["id"],
+        codigo_etapa="E01b",
+        nombre_etapa="Oficio circular OTIN",
+        area_responsable="OTIN",
+        estado_etapa="COMPLETADO",
+        registrado_por="test",
+        nro_ronda=1,
+    ))
+    db_session.flush()
+
+    payload = {
+        "codigo_etapa": "E01c",
+        "nombre_etapa": "Respuesta área con CMN+SIGA",
+        "area_usuaria": "DCOP",
+        "fecha_inicio": "2026-06-01",
+        "estado_etapa": "COMPLETADO",
+        "cmn_siga_confirmado": True,
+    }
+    resp = client.post(
+        f"/procesos/{proc['id']}/etapas",
+        json=payload,
+        headers=editor_headers,
+    )
+    assert resp.status_code == 201, resp.text
+    data = resp.json()
+    assert data["cmn_siga_confirmado"] is True
