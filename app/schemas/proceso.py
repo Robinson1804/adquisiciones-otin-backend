@@ -45,6 +45,10 @@ class ProcesoUpdate(BaseModel):
     pim: Decimal | None = None
     estado: Literal["EN PROCESO", "CULMINADO", "CANCELADO"] | None = None
     motivo_cancel: str | None = None
+    anno: int | None = Field(default=None, ge=2020, le=2100)
+    area_iniciadora: str | None = None
+    denominacion_cmn: str | None = None
+    clasificador_cmn: str | None = None
 
 
 class ProcesoOut(BaseModel):

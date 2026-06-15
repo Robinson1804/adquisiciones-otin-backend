@@ -298,7 +298,13 @@ def update_proceso(
         )
 
     # Apply non-None fields
-    for field in ("requerimiento", "tipo", "unidad_resp", "areas_usuarias", "pim", "estado", "motivo_cancel"):
+    _MUTABLE_FIELDS = (
+        "requerimiento", "tipo", "unidad_resp", "areas_usuarias", "pim",
+        "estado", "motivo_cancel",
+        # flujo-real-otin-v2 — campos editables de Ficha
+        "anno", "area_iniciadora", "denominacion_cmn", "clasificador_cmn",
+    )
+    for field in _MUTABLE_FIELDS:
         value = getattr(body, field)
         if value is not None:
             setattr(proceso, field, value)
